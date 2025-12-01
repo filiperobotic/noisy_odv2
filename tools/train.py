@@ -8,6 +8,7 @@ from mmengine.registry import RUNNERS
 from mmengine.runner import Runner
 
 from mmdet.utils import setup_cache_size_limit_of_dynamo
+import wandb
 
 
 def parse_args():
@@ -59,6 +60,8 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    wandb.login()
 
     # Reduce the number of repeated compilations and improve
     # training speed.
