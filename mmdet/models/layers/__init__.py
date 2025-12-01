@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from .activations import SiLU
-from .bbox_nms import fast_nms, multiclass_nms
+from .bbox_nms import fast_nms, multiclass_nms, multiclass_nms_with_logits
 from .brick_wrappers import (AdaptiveAvgPool2d, FrozenBatchNorm2d,
                              adaptive_avg_pool2d)
 from .conv_upsample import ConvUpsample
