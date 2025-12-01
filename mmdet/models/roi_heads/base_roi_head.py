@@ -127,3 +127,71 @@ class BaseRoIHead(BaseModule, metaclass=ABCMeta):
                 x, batch_img_metas, results_list, rescale=rescale)
 
         return results_list
+    
+    def predict_and_logits(self,
+                    x: Tuple[Tensor],
+                    rpn_results_list: InstanceList,
+                    batch_data_samples: SampleList,
+                    rescale: bool = False,
+                    all_logits=False) -> InstanceList:
+            """Perform forward propagation of the roi head and predict detection
+            results on the features of the upstream network.
+
+            Args:
+                x (tuple[Tensor]): Features from upstream network. Each
+                    has shape (N, C, H, W).
+                rpn_results_list (list[:obj:`InstanceData`]): list of region
+                    proposals.
+                batch_data_samples (List[:obj:`DetDataSample`]): The Data
+                    Samples. It usually includes information such as
+                    `gt_instance`, `gt_panoptic_seg` and `gt_sem_seg`.
+                rescale (bool): Whether to rescale the results to
+                    the original image. Defaults to True.
+                all_logits: If True, return all the logits of the bbox head, otherwise return only the logits of the predicted classes.
+
+            Returns:
+                list[obj:`InstanceData`]: Detection results of each image.
+                Each item usually contains following keys.
+
+                    - scores (Tensor): Classification scores, has a shape
+                    (num_instance, )
+                    - labels (Tensor): Labels of bboxes, has a shape
+                    (num_instances, ).
+                    - bboxes (Tensor): Has a shape (num_instances, 4),
+                    the last dimension 4 arrange as (x1, y1, x2, y2).
+                    - masks (Tensor): Has a shape (num_instances, H, W).
+            """
+            assert self.with_bbox, 'Bbox head must be implemented.'
+            batch_img_metas = [
+                data_samples.metainfo for data_samples in batch_data_samples
+            ]
+
+            # TODO: nms_op in mmcv need be enhanced, the bbox result may get
+            #  difference when not rescale in bbox_head
+
+            # If it has the mask branch, the bbox branch does not need
+            # to be scaled to the original image scale, because the mask
+            # branch will scale both bbox and mask at the same time.
+            bbox_rescale = rescale if not self.with_mask else False
+            # results_list = self.predict_bbox(
+            #     x,
+            #     batch_img_metas,
+            #     rpn_results_list,
+            #     rcnn_test_cfg=self.test_cfg,
+            #     rescale=bbox_rescale)
+            
+            #FILIPE OCE
+            # import pdb; pdb.set_trace()
+            results_list = self.predict_bbox_logits(
+                x,
+                batch_img_metas,
+                rpn_results_list,
+                rcnn_test_cfg=self.test_cfg,
+                rescale=bbox_rescale,
+                all_logits=all_logits)
+
+            if self.with_mask:
+                results_list = self.predict_mask(
+                    x, batch_img_metas, results_list, rescale=rescale)
+
+            return results_list
