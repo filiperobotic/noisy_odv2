@@ -241,3 +241,237 @@ class TwoStageDetector(BaseDetector):
         batch_data_samples = self.add_pred_to_datasample(
             batch_data_samples, results_list)
         return batch_data_samples
+    
+    #filipe implementation
+    def my_get_preds(self, batch_inputs: Tensor,
+             batch_data_samples: SampleList) -> dict:
+        """Calculate losses from a batch of inputs and data samples.
+
+        Args:
+            batch_inputs (Tensor): Input images of shape (N, C, H, W).
+                These should usually be mean centered and std scaled.
+            batch_data_samples (List[:obj:`DetDataSample`]): The batch
+                data samples. It usually includes information such
+                as `gt_instance` or `gt_panoptic_seg` or `gt_sem_seg`.
+
+        Returns:
+            dict: A dictionary of loss components
+        """
+        x = self.extract_feat(batch_inputs)
+
+        losses = dict()
+
+        # RPN forward and loss
+        if self.with_rpn:
+            proposal_cfg = self.train_cfg.get('rpn_proposal',
+                                              self.test_cfg.rpn)
+            rpn_data_samples = copy.deepcopy(batch_data_samples)
+            # set cat_id of gt_labels to 0 in RPN
+            for data_sample in rpn_data_samples:
+                data_sample.gt_instances.labels = \
+                    torch.zeros_like(data_sample.gt_instances.labels)
+
+            # import pdb;pdb.set_trace()
+            rpn_losses, rpn_results_list = self.rpn_head.loss_and_predict(
+                x, rpn_data_samples, proposal_cfg=proposal_cfg)
+            # avoid get same name with roi_head loss
+            # keys = rpn_losses.keys()
+            # for key in list(keys):
+            #     if 'loss' in key and 'rpn' not in key:
+            #         rpn_losses[f'rpn_{key}'] = rpn_losses.pop(key)
+            # losses.update(rpn_losses)
+        else:
+            assert batch_data_samples[0].get('proposals', None) is not None
+            # use pre-defined proposals in InstanceData for the second stage
+            # to extract ROI features.
+            rpn_results_list = [
+                data_sample.proposals for data_sample in batch_data_samples
+            ]
+        # import pdb;pdb.set_trace()
+        # roi_losses = self.roi_head.loss(x, rpn_results_list,
+                                        # batch_data_samples)
+        # import pdb;pdb.set_trace()
+        results_list = self.roi_head.predict(
+            x, rpn_results_list, batch_data_samples, rescale=False)
+        
+        batch_data_samples = self.add_pred_to_datasample(
+            batch_data_samples, results_list)
+        
+        # losses.update(roi_losses)
+
+        # return losses
+        return batch_data_samples
+    
+    #filipe implementation
+    def my_get_logits(self, batch_inputs: Tensor,
+             batch_data_samples: SampleList, all_logits=False) -> dict:
+        """Calculate losses from a batch of inputs and data samples.
+
+        Args:
+            batch_inputs (Tensor): Input images of shape (N, C, H, W).
+                These should usually be mean centered and std scaled.
+            batch_data_samples (List[:obj:`DetDataSample`]): The batch
+                data samples. It usually includes information such
+                as `gt_instance` or `gt_panoptic_seg` or `gt_sem_seg`.
+            all_logits (bool): If True, return all logits, otherwise return only the logits of the classes that are present in the image.
+
+        Returns:
+            dict: A dictionary of loss components
+        """
+        x = self.extract_feat(batch_inputs)
+
+        losses = dict()
+
+        # RPN forward and loss
+        if self.with_rpn:
+            proposal_cfg = self.train_cfg.get('rpn_proposal',
+                                              self.test_cfg.rpn)
+            rpn_data_samples = copy.deepcopy(batch_data_samples)
+            # set cat_id of gt_labels to 0 in RPN
+            for data_sample in rpn_data_samples:
+                data_sample.gt_instances.labels = \
+                    torch.zeros_like(data_sample.gt_instances.labels)
+
+            # import pdb;pdb.set_trace()
+            rpn_losses, rpn_results_list = self.rpn_head.loss_and_predict(
+                x, rpn_data_samples, proposal_cfg=proposal_cfg)
+            # avoid get same name with roi_head loss
+            # keys = rpn_losses.keys()
+            # for key in list(keys):
+            #     if 'loss' in key and 'rpn' not in key:
+            #         rpn_losses[f'rpn_{key}'] = rpn_losses.pop(key)
+            # losses.update(rpn_losses)
+        else:
+            assert batch_data_samples[0].get('proposals', None) is not None
+            # use pre-defined proposals in InstanceData for the second stage
+            # to extract ROI features.
+            rpn_results_list = [
+                data_sample.proposals for data_sample in batch_data_samples
+            ]
+        # import pdb;pdb.set_trace()
+        # roi_losses = self.roi_head.loss(x, rpn_results_list,
+                                        # batch_data_samples)
+        # import pdb;pdb.set_trace()
+        results_list = self.roi_head.predict_and_logits(
+            x, rpn_results_list, batch_data_samples, rescale=False, all_logits=all_logits)
+        
+        
+        # import pdb;pdb.set_trace()
+        
+        batch_data_samples = self.add_pred_to_datasample(
+            batch_data_samples, results_list)
+        
+        #F.softmax(results_list[0]['scores'])
+        
+        # losses.update(roi_losses)
+
+        # return losses
+        return batch_data_samples
+    
+    #filipe implementation
+    def my_get_features_logits(self, batch_inputs: Tensor,
+             batch_data_samples: SampleList, all_logits=False) -> dict:
+        """Calculate losses from a batch of inputs and data samples.
+
+        Args:
+            batch_inputs (Tensor): Input images of shape (N, C, H, W).
+                These should usually be mean centered and std scaled.
+            batch_data_samples (List[:obj:`DetDataSample`]): The batch
+                data samples. It usually includes information such
+                as `gt_instance` or `gt_panoptic_seg` or `gt_sem_seg`.
+            all_logits (bool): If True, return all logits, otherwise return only the logits of the classes that are present in the image.
+
+        Returns:
+            dict: A dictionary of loss components
+        """
+        x = self.extract_feat(batch_inputs)
+
+        losses = dict()
+
+        # RPN forward and loss
+        if self.with_rpn:
+            proposal_cfg = self.train_cfg.get('rpn_proposal',
+                                              self.test_cfg.rpn)
+            rpn_data_samples = copy.deepcopy(batch_data_samples)
+            # set cat_id of gt_labels to 0 in RPN
+            for data_sample in rpn_data_samples:
+                data_sample.gt_instances.labels = \
+                    torch.zeros_like(data_sample.gt_instances.labels)
+
+            # import pdb;pdb.set_trace()
+            rpn_losses, rpn_results_list = self.rpn_head.loss_and_predict(
+                x, rpn_data_samples, proposal_cfg=proposal_cfg)
+            # avoid get same name with roi_head loss
+            # keys = rpn_losses.keys()
+            # for key in list(keys):
+            #     if 'loss' in key and 'rpn' not in key:
+            #         rpn_losses[f'rpn_{key}'] = rpn_losses.pop(key)
+            # losses.update(rpn_losses)
+        else:
+            assert batch_data_samples[0].get('proposals', None) is not None
+            # use pre-defined proposals in InstanceData for the second stage
+            # to extract ROI features.
+            rpn_results_list = [
+                data_sample.proposals for data_sample in batch_data_samples
+            ]
+        # import pdb;pdb.set_trace()
+        # roi_losses = self.roi_head.loss(x, rpn_results_list,
+                                        # batch_data_samples)
+        # import pdb;pdb.set_trace()
+        results_list = self.roi_head.predict_and_logits(
+            x, rpn_results_list, batch_data_samples, rescale=False, all_logits=all_logits)
+        
+        # import pdb;pdb.set_trace()
+
+               
+        
+        results_list_feat = self.roi_head.predict(x, rpn_results_list, batch_data_samples, rescale=False)
+
+        all_rois = []
+        for img_idx, result in enumerate(results_list_feat):
+            bboxes = result['bboxes']
+            indices = torch.full((bboxes.shape[0], 1), img_idx, device=bboxes.device)
+            rois = torch.cat([indices, bboxes], dim=1)
+            all_rois.append(rois)
+        all_rois = torch.cat(all_rois, dim=0)
+        roi_feats = self.roi_head.bbox_roi_extractor(x, all_rois)
+        # roi_feats_flat = roi_feats.view(roi_feats.size(0), -1)  # [200, 256 * 7 * 7]
+
+        if roi_feats.size(0)>0:
+            flattened = roi_feats.view(roi_feats.size(0), -1)
+            fc_feats = self.roi_head.bbox_head.shared_fcs[0](flattened)
+            fc_feats = self.roi_head.bbox_head.relu(fc_feats)
+        else: 
+            # import pdb;pdb.set_trace()
+            fc_feats = []
+            
+        # import pdb;pdb.set_trace()
+        # Separate features by image in the batch
+        # img_counts = [result['bboxes'].shape[0] for result in results_list]
+        # split_feats = torch.split(fc_feats, img_counts, dim=0)
+        # roi_feats_img1, roi_feats_img2 = split_feats[0], split_feats[1]
+                # Separate features by image in the batch (ASSUMING 100 bboxes per image, batch size 2)
+        roi_feats_img1 = fc_feats[:len(results_list[0])]
+        
+
+        # Flattened feature vectaors per image
+        # roi_feats_img1_flat = roi_feats_img1.view(roi_feats_img1.size(0), -1)
+        # roi_feats_img2_flat = roi_feats_img2.view(roi_feats_img2.size(0), -1)
+        # import pdb;pdb.set_trace()
+        # my_rois = [roi_feats_img1_flat,roi_feats_img2_flat]
+        results_list[0]['feat'] = roi_feats_img1
+        if len(results_list) > 1:
+            roi_feats_img2 = fc_feats[len(results_list[0]):]
+            results_list[1]['feat'] = roi_feats_img2
+
+        # import pdb;pdb.set_trace()
+        
+        batch_data_samples = self.add_pred_to_datasample(
+            batch_data_samples, results_list)
+        
+        #F.softmax(results_list[0]['scores'])
+        # import pdb;pdb.set_trace()
+        # losses.update(roi_losses)
+
+        # return losses
+        return batch_data_samples
