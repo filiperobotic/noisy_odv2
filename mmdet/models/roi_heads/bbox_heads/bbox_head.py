@@ -472,6 +472,62 @@ class BBoxHead(BaseModule):
             result_list.append(results)
 
         return result_list
+    
+    #FILIPE CODE
+    def predict_by_feat_logit(self,
+                        rois: Tuple[Tensor],
+                        cls_scores: Tuple[Tensor],
+                        bbox_preds: Tuple[Tensor],
+                        batch_img_metas: List[dict],
+                        rcnn_test_cfg: Optional[ConfigDict] = None,
+                        rescale: bool = False,
+                        all_logits=False) -> InstanceList:
+        """Transform a batch of output features extracted from the head into
+        bbox results.
+
+        Args:
+            rois (tuple[Tensor]): Tuple of boxes to be transformed.
+                Each has shape  (num_boxes, 5). last dimension 5 arrange as
+                (batch_index, x1, y1, x2, y2).
+            cls_scores (tuple[Tensor]): Tuple of box scores, each has shape
+                (num_boxes, num_classes + 1).
+            bbox_preds (tuple[Tensor]): Tuple of box energies / deltas, each
+                has shape (num_boxes, num_classes * 4).
+            batch_img_metas (list[dict]): List of image information.
+            rcnn_test_cfg (obj:`ConfigDict`, optional): `test_cfg` of R-CNN.
+                Defaults to None.
+            rescale (bool): If True, return boxes in original image space.
+                Defaults to False.
+
+        Returns:
+            list[:obj:`InstanceData`]: Instance segmentation
+            results of each image after the post process.
+            Each item usually contains following keys.
+
+                - scores (Tensor): Classification scores, has a shape
+                  (num_instance, )
+                - labels (Tensor): Labels of bboxes, has a shape
+                  (num_instances, ).
+                - bboxes (Tensor): Has a shape (num_instances, 4),
+                  the last dimension 4 arrange as (x1, y1, x2, y2).
+        """
+        assert len(cls_scores) == len(bbox_preds)
+        result_list = []
+        for img_id in range(len(batch_img_metas)):
+            img_meta = batch_img_metas[img_id]
+            #results = self._predict_by_feat_single(
+            #FILIPE CODE
+            results = self._predict_by_feat_single_logit(
+                roi=rois[img_id],
+                cls_score=cls_scores[img_id],
+                bbox_pred=bbox_preds[img_id],
+                img_meta=img_meta,
+                rescale=rescale,
+                rcnn_test_cfg=rcnn_test_cfg,
+                all_logits=all_logits)
+            result_list.append(results)
+
+        return result_list
 
     def _predict_by_feat_single(
             self,
