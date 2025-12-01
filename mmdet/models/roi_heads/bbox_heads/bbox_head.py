@@ -10,7 +10,7 @@ from mmengine.structures import InstanceData
 from torch import Tensor
 from torch.nn.modules.utils import _pair
 
-from mmdet.models.layers import multiclass_nms
+from mmdet.models.layers import multiclass_nms, multiclass_nms_with_logits
 from mmdet.models.losses import accuracy
 from mmdet.models.task_modules.samplers import SamplingResult
 from mmdet.models.utils import empty_instances, multi_apply
