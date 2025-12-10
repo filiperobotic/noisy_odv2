@@ -742,7 +742,7 @@ class MyHookGraphNoiseRelabelFilterGMM(Hook):
             self._opt_cong = optim.AdamW(self._cong.parameters(), lr=self.cong_lr, weight_decay=0.0)
 
     def before_train_epoch(self, runner):
-        if (runner.epoch + 1) <= 0:
+        if (runner.epoch + 1) <= 1:
             return
 
         # Reinicia lista de imagens do W&B a cada época
@@ -1583,7 +1583,7 @@ class MyHookGraphNoiseRelabelFilterGMM(Hook):
         #   Passo 3B) ajusta um GMM por classe usando TODOS os scores acumulados e marca low-confidence como noisy
 
         # ---- knobs (se preferir, promova para __init__) ----
-        gmm_filter_thr = 0.5    # prob. do componente de baixa confiança acima da qual marcamos como noisy
+        gmm_filter_thr = 0.95    # prob. do componente de baixa confiança acima da qual marcamos como noisy
         gmm_min_samples = 8     # só aplica GMM para classes com pelo menos esse nº de amostras na época
 
         # ---- Passo 3A: acumula p_gt por classe em toda a época ----
@@ -2013,7 +2013,7 @@ class MyHookGraphNoiseRelabelFilterGMMSanity(Hook):
             self._opt_cong = optim.AdamW(self._cong.parameters(), lr=self.cong_lr, weight_decay=0.0)
 
     def before_train_epoch(self, runner):
-        if (runner.epoch + 1) <= 1:
+        if (runner.epoch + 1) <= 0:
             return
 
         # Reinicia lista de imagens do W&B a cada época
@@ -5637,7 +5637,7 @@ class MyHookGraphNoiseRelabelFilterGMMSanity_inverted(Hook):
 
         # só faz filter depois do warmup
         #if (runner.epoch + 1) >= self.filter_warmup:
-        if (runner.epoch + 1) >= 0:
+        if (runner.epoch + 1) >= 1:
 
             # filtering
             #Unir todas as probabilidades das imagens e treinar o GMM**
