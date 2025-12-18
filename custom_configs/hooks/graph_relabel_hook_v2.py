@@ -1,5 +1,7 @@
 from mmengine.hooks import Hook
-from mmdet.registry import HOOKS
+# from mmdet.registry import HOOKS
+from mmengine.registry import HOOKS as MMENGINE_HOOKS
+from mmdet.registry import HOOKS as MMDET_HOOKS
 import torch
 from mmdet.apis import init_detector, inference_detector
 import mmcv
@@ -453,7 +455,9 @@ def _make_prctx_figure(pr: torch.Tensor, pr_ctx: torch.Tensor, qc: torch.Tensor 
 
 
 # === Lightweight GNN noise filter hook ===
-@HOOKS.register_module()
+# @HOOKS.register_module()
+@MMENGINE_HOOKS.register_module()
+@MMDET_HOOKS.register_module()
 class MyHookGraphNoiseRelabel(Hook):
     @torch.no_grad()
     def _compute_co_probs(self, device):
@@ -1575,7 +1579,9 @@ class MyHookGraphNoiseRelabel(Hook):
                 runner.logger.warning(f"[W&B] Falha no log final da epoch: {e_final}")
 
 
-@HOOKS.register_module()
+# @HOOKS.register_module()
+@MMENGINE_HOOKS.register_module()
+@MMDET_HOOKS.register_module()
 class MyHookGraphNoiseTrustRelabel(Hook):
     @torch.no_grad()
     def _compute_co_probs(self, device):
