@@ -48,7 +48,7 @@ custom_imports = dict(
 
 custom_hooks = [
                
-    dict(type='MyHookGraphNoiseTrustRelabel', priority='NORMAL',
+    dict(type='MyHookGraphNoiseTrustRelabel', _scope_='mmengine', priority='NORMAL',
         #  warmup_epochs = warmup_epochs,
          thr_noise = thr_noise,
          use_percentile = use_percentile,
