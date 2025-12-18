@@ -38,7 +38,7 @@ trust_thr = 0.9
 
 custom_imports = dict(
     imports=[
-             'custom_configs.hooks.graph_relabel_hook_v2',
+             'custom_configs.hooks.graph_relabel_hook_v2_trust',
              'custom_configs.hooks.wandb_pred_buckets_hook'],  # hook v2 com ConG/KLD
     allow_failed_imports=False
 )
@@ -48,7 +48,7 @@ custom_imports = dict(
 
 custom_hooks = [
                
-    dict(type='MyHookGraphNoiseTrustRelabel', _scope_='mmengine', priority='NORMAL',
+    dict(type='MyHookGraphNoiseTrustRelabel',  priority='NORMAL',
         #  warmup_epochs = warmup_epochs,
          thr_noise = thr_noise,
          use_percentile = use_percentile,
