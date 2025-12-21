@@ -594,7 +594,7 @@ def _make_prctx_figure(pr: torch.Tensor, pr_ctx: torch.Tensor, qc: torch.Tensor 
 
 # === Lightweight GNN noise filter hook ===
 @HOOKS.register_module()
-class MyHookGraphNoiseRelabel(Hook):
+class MyHookGraphNoiseRelabelFeat(Hook):
     @torch.no_grad()
     def _compute_co_probs(self, device):
         co_counts_cpu = self._cooc_counts.clone().float()

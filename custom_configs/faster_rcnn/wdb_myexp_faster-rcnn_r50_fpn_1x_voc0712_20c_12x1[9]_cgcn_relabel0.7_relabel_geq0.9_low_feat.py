@@ -30,7 +30,7 @@ iou_assigner = 0.5
 low_quality = True
 # train_ratio=0.5
 relabel_thr_ctx = 0.7
-relabel_thr_high = 0.7
+relabel_thr_high = 0.9
 
 
 
