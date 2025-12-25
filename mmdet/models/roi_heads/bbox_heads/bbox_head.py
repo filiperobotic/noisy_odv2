@@ -330,6 +330,27 @@ class BBoxHead(BaseModule):
         # cls_reg_targets is only for cascade rcnn
         return dict(loss_bbox=losses, bbox_targets=cls_reg_targets)
 
+    
+    def partial_label_loss(self, cls_score, partial_labels, label_weights):
+        log_probs = F.log_softmax(cls_score, dim=-1)
+
+        total_loss = cls_score.new_zeros(())
+        count = cls_score.new_zeros(())
+
+        for i, candidates in enumerate(partial_labels):
+            if not candidates:
+                continue
+            w = label_weights[i]
+            if w.item() == 0:
+                continue
+
+            candidates_tensor = torch.as_tensor(candidates, device=cls_score.device, dtype=torch.long)
+            lp = torch.logsumexp(log_probs[i, candidates_tensor], dim=0)  # log(sum p)
+            total_loss = total_loss + (-lp) * w
+            count = count + w
+
+            return total_loss / count.clamp_min(1e-12)
+
     def loss(self,
              cls_score: Tensor,
              bbox_pred: Tensor,
@@ -375,12 +396,63 @@ class BBoxHead(BaseModule):
         if cls_score is not None:
             avg_factor = max(torch.sum(label_weights > 0).float().item(), 1.)
             if cls_score.numel() > 0:
-                loss_cls_ = self.loss_cls(
-                    cls_score,
-                    labels,
-                    label_weights,
-                    avg_factor=avg_factor,
-                    reduction_override=reduction_override)
+
+                #filipe addition
+                # Geração dinâmica dos rótulos parciais
+                warmup_epochs = 2
+                
+                current_epoch = self.current_epoch
+                
+                partial_labels = []
+                for i in range(cls_score.size(0)):
+                    
+                    gt_label = labels[i].item()
+                    
+                if (current_epoch < warmup_epochs) or  (gt_label == self.num_classes):
+                    # Durante o aquecimento, use os rótulos reais
+                    candidates = [gt_label]
+                else:
+                    k_value = 2
+                    # conf_thr = 0.9
+                    conf_thr = 0.5
+                    # conf_relabel = 0.5
+                    conf_relabel = 0.9
+
+                    probs_i = F.softmax(cls_score[i], dim=-1)[:-1]  # Exclui BG
+                    confident_idxs = (probs_i > conf_thr).nonzero(as_tuple=True)[0].tolist()
+                        
+                    scores_i = cls_score[i][:-1]  # Exclui o BG
+                    top3 = torch.topk(scores_i, k=k_value).indices.tolist()
+
+
+                    # [novo codigo] - baseado no mind map
+                    if probs_i[top3[0]]>=conf_relabel : #relabel
+                        candidates = [top3[0]]
+                    else:
+                        candidates = [gt_label]
+                        for j in range(k_value-1):
+                            if (gt_label != top3[j]) and (top3[j] in confident_idxs) :
+                            # if (gt_label != top3[j]) :
+                                candidates.append(top3[j])
+                        # [end - novo codigo] - baseado no mind map
+                         
+                        
+                    partial_labels.append(candidates)
+
+                loss_cls_ = self.partial_label_loss(
+                    cls_score, partial_labels, label_weights
+                )
+                
+                #end filipe adition
+
+
+                #codigo original que chama cross entropy loss
+                # loss_cls_ = self.loss_cls(
+                #     cls_score,
+                #     labels,
+                #     label_weights,
+                #     avg_factor=avg_factor,
+                #     reduction_override=reduction_override)
                 if isinstance(loss_cls_, dict):
                     losses.update(loss_cls_)
                 else:
