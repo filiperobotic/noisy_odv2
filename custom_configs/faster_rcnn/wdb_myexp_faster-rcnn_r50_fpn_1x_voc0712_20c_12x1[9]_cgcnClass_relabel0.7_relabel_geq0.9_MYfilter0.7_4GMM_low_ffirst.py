@@ -39,7 +39,7 @@ max_noise_per_class = 0.1
 
 custom_imports = dict(
     imports=[
-             'custom_configs.hooks.graph_relabel_hook_v2_filterGMM',
+             'custom_configs.hooks.graph_relabel_hook_v2_filterGMM_class',
              'custom_configs.hooks.wandb_pred_buckets_hook'],  # hook v2 com ConG/KLD
     allow_failed_imports=False
 )
