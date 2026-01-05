@@ -2756,7 +2756,7 @@ class MyHookGraphNoiseRelabelFilterGMMSanity_invertedClass(Hook):
 
         # só faz filter depois do warmup
         #if (runner.epoch + 1) >= self.filter_warmup:
-        noise_proportion = np.array([])
+        noise_proportion = np.array([], dtype=np.float32)
         if (runner.epoch + 1) >= 1:
 
             # filtering
@@ -2846,7 +2846,12 @@ class MyHookGraphNoiseRelabelFilterGMMSanity_invertedClass(Hook):
                 low_confidence_indices = np.where(low_confidence_scores > threshold)[0]
                 all_classes_low_confidence_scores_global_idx.extend(c_global_indexes[low_confidence_indices])
 
-                noise_proportion.append(len(low_confidence_indices)/len(c_class_scores))
+                # noise_proportion.append(len(low_confidence_indices)/len(c_class_scores))
+                # dentro do loop:
+                noise_proportion = np.append(
+                    noise_proportion,
+                    len(low_confidence_indices) / max(1, len(c_class_scores))
+                )
                 
 
                 # draw pred hist
