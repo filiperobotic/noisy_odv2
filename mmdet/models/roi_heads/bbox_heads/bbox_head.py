@@ -399,60 +399,60 @@ class BBoxHead(BaseModule):
 
                 #filipe addition
                 # Geração dinâmica dos rótulos parciais
-                warmup_epochs = 2
+                # warmup_epochs = 2
                 
-                current_epoch = self.current_epoch
+                # current_epoch = self.current_epoch
                 
-                partial_labels = []
-                for i in range(cls_score.size(0)):
+                # partial_labels = []
+                # for i in range(cls_score.size(0)):
                     
-                    gt_label = labels[i].item()
+                #     gt_label = labels[i].item()
                     
-                if (current_epoch < warmup_epochs) or  (gt_label == self.num_classes):
-                    # Durante o aquecimento, use os rótulos reais
-                    candidates = [gt_label]
-                else:
-                    k_value = 2
-                    # conf_thr = 0.9
-                    conf_thr = 0.5
-                    # conf_relabel = 0.5
-                    conf_relabel = 0.9
+                # if (current_epoch < warmup_epochs) or  (gt_label == self.num_classes):
+                #     # Durante o aquecimento, use os rótulos reais
+                #     candidates = [gt_label]
+                # else:
+                #     k_value = 2
+                #     # conf_thr = 0.9
+                #     conf_thr = 0.5
+                #     # conf_relabel = 0.5
+                #     conf_relabel = 0.9
 
-                    probs_i = F.softmax(cls_score[i], dim=-1)[:-1]  # Exclui BG
-                    confident_idxs = (probs_i > conf_thr).nonzero(as_tuple=True)[0].tolist()
+                #     probs_i = F.softmax(cls_score[i], dim=-1)[:-1]  # Exclui BG
+                #     confident_idxs = (probs_i > conf_thr).nonzero(as_tuple=True)[0].tolist()
                         
-                    scores_i = cls_score[i][:-1]  # Exclui o BG
-                    top3 = torch.topk(scores_i, k=k_value).indices.tolist()
+                #     scores_i = cls_score[i][:-1]  # Exclui o BG
+                #     top3 = torch.topk(scores_i, k=k_value).indices.tolist()
 
 
-                    # [novo codigo] - baseado no mind map
-                    if probs_i[top3[0]]>=conf_relabel : #relabel
-                        candidates = [top3[0]]
-                    else:
-                        candidates = [gt_label]
-                        for j in range(k_value-1):
-                            if (gt_label != top3[j]) and (top3[j] in confident_idxs) :
-                            # if (gt_label != top3[j]) :
-                                candidates.append(top3[j])
-                        # [end - novo codigo] - baseado no mind map
+                #     # [novo codigo] - baseado no mind map
+                #     if probs_i[top3[0]]>=conf_relabel : #relabel
+                #         candidates = [top3[0]]
+                #     else:
+                #         candidates = [gt_label]
+                #         for j in range(k_value-1):
+                #             if (gt_label != top3[j]) and (top3[j] in confident_idxs) :
+                #             # if (gt_label != top3[j]) :
+                #                 candidates.append(top3[j])
+                #         # [end - novo codigo] - baseado no mind map
                          
                         
-                    partial_labels.append(candidates)
+                #     partial_labels.append(candidates)
 
-                loss_cls_ = self.partial_label_loss(
-                    cls_score, partial_labels, label_weights
-                )
+                # loss_cls_ = self.partial_label_loss(
+                #     cls_score, partial_labels, label_weights
+                # )
                 
                 #end filipe adition
 
 
                 #codigo original que chama cross entropy loss
-                # loss_cls_ = self.loss_cls(
-                #     cls_score,
-                #     labels,
-                #     label_weights,
-                #     avg_factor=avg_factor,
-                #     reduction_override=reduction_override)
+                loss_cls_ = self.loss_cls(
+                    cls_score,
+                    labels,
+                    label_weights,
+                    avg_factor=avg_factor,
+                    reduction_override=reduction_override)
                 if isinstance(loss_cls_, dict):
                     losses.update(loss_cls_)
                 else:
