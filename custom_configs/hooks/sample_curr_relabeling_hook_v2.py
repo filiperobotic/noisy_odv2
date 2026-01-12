@@ -330,7 +330,9 @@ class MyHookCurrIouFilterPredGT_Class_Relabel(Hook):
                             for vidx in valid_instance_indices:
                                 b = sub_dataset.data_list[dataset_data_idx]['instances'][vidx]['bbox']
                                 gt_boxes.append(b)
-                            gt_boxes = torch.tensor(gt_boxes, dtype=torch.float32, device=pred_instances.priors.device)
+                            # IoU filtering does not require model predictions; keep it on CPU to avoid dependency on pred_instances
+                            # (pred_instances is defined later in the loop)
+                            gt_boxes = torch.tensor(gt_boxes, dtype=torch.float32)
 
                             iou_mat = pairwise_iou_xyxy(gt_boxes)
                             # ignore self-overlap
