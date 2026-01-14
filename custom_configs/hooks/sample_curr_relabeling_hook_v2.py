@@ -984,66 +984,48 @@ class MyHookCurrIouFilterPredGT_Class_Relabel(Hook):
                     
 
                     for gt_idx in gt_idx_list:
-                    # for gt_idx in valid_instance_indices:
+                        related_global_index = allbb_preds_map[img_path][gt_idx]['global_index_counter']
 
-                        related_global_index = allbb_preds_map[img_path][gt_idx]['global_index_counter']  
-
-                        
-
-                        #if index in low_confidence_indices:
-                        #if related_global_index in all_classes_low_confidence_scores_global_idx:
-                        # if low confidence and not too high confident
-                        #if (related_global_index in all_classes_low_confidence_scores_global_idx) and (allbb_preds_map[img_path][gt_idx]['pred'] < self.relabel_conf):
-                        #if (related_global_index in all_classes_low_confidence_scores_global_idx) and (allbb_preds_map[img_path][gt_idx]['pred'] < 0.5):
-                        
-                        # if (related_global_index in all_classes_low_confidence_scores_global_idx) and (allbb_preds_map[img_path][gt_idx]['pred'] < 0.3):
                         if (related_global_index in all_classes_low_confidence_scores_global_idx) and (allbb_preds_map[img_path][gt_idx]['pred'] < self.filter_thr):
-                            if my_counter<5:
-
-                                                              
+                            if my_counter < 5:
                                 import shutil
-
-                                # Tenta encontrar o arquivo com sufixo '_relabel.jpg' ou '_not_relabel.jpg'
-                                
                                 base_prefix = f"{runner.work_dir}/debug_imgs/{os.path.basename(img_path[:-4])}_ep{runner.epoch + 1}_gt{gt_idx}"
                                 possible_suffixes = ["_relabeled.jpg", "_not_relabel.jpg", "_grouped.jpg"]
-
                                 for suffix in possible_suffixes:
-                                    
                                     base_debug_path = base_prefix + suffix
                                     if os.path.exists(base_debug_path):
-                                        my_counter+=1 
+                                        my_counter += 1
                                         filtered_debug_path = base_debug_path[:-4] + "_filtered.jpg"
-                                        # if suffix == "_relabeled.jpg":
-                                        #     import pdb; pdb.set_trace()
                                         shutil.copy(base_debug_path, filtered_debug_path)
                                         print(f"[INFO] Cópia criada: {filtered_debug_path}")
-                                        break  # Para no primeiro que encontrar 
-
-                                # desenhar_bboxesv3_filtered(all_inputs_map[img_path], sub_dataset.data_list[dataset_data_idx]['instances'], save_path=f'debug_imgs/{os.path.basename(img_path[:-4])}_ep{runner.epoch + 1}_gt{gt_idx}_filtered.jpg')  
-                            # Encontrar `valid_idx` correspondente ao `gt_idx`
-                            # if gt_idx in gt_idx_list:
-                            #[ME PARECE ERRADO]
-                            # valid_idx = valid_instance_indices[gt_idx_list.index(gt_idx)]
-                            #[TESTAR ESSE]
-                            # import pdb; pdb.set_trace()
-                            valid_idx = valid_instance_indices[gt_idx]
-
+                                        break
+                            # Robust mapping for valid_idx (fix IndexError/GT mapping)
+                            # Map gt_idx -> data_list instance index robustly.
+                            # Prefer direct mapping by gt_idx (VOC order), but fall back to position within gt_idx_list if needed.
+                            inst_all = sub_dataset.data_list[dataset_data_idx]['instances']
+                            valid_idx = None
+                            if gt_idx < len(inst_all):
+                                valid_idx = gt_idx
+                            else:
+                                try:
+                                    pos = gt_idx_list.index(gt_idx)
+                                    if pos < len(valid_instance_indices):
+                                        valid_idx = valid_instance_indices[pos]
+                                except ValueError:
+                                    valid_idx = None
+                            if valid_idx is None:
+                                print(
+                                    f"[GMM-FILTER][WARN] Could not map gt_idx={gt_idx} to instance index "
+                                    f"(len(inst_all)={len(inst_all)}, len(valid)={len(valid_instance_indices)}) img={os.path.basename(img_path)}"
+                                )
+                                continue
                             # self.double_thr
                             if allbb_preds_map[img_path][gt_idx]['max_pred'] >= self.double_thr:
-                                #update
+                                # update
                                 sub_dataset.data_list[dataset_data_idx]['instances'][valid_idx]['bbox_label'] = allbb_preds_map[img_path][gt_idx]['pred_label']
-                            else:    
-                                #filtra
+                            else:
+                                # filtra
                                 sub_dataset.data_list[dataset_data_idx]['instances'][valid_idx]['ignore_flag'] = 1
-
-                            
-                            # import pdb; pdb.set_trace()
-                            # sub_dataset.data_list[dataset_data_idx]['instances'][valid_idx]['ignore_flag'] = 1
-                            # sub_dataset.data_list[dataset_data_idx]['instances'][gt_idx]['ignore_flag'] = 1
-                                #print(f"[UPDATE] ignore_flag=1 atualizado para img: {img_path}, GT: {gt_idx}")
-                                #bbox = sub_dataset.data_list[dataset_data_idx]['instances'][valid_idx]['bbox']
-                                # print(f"[UPDATE] ignore_flag=1 atualizado para img: {img_path}, BBOX: {bbox} GT: {gt_idx}")
                         
                     
                                 
@@ -1217,20 +1199,20 @@ class MyHookCurrIntoFilterPredGT_Class_Relabel(Hook):
                         sub_dataset_idx, dataset_data_idx = dataset_img_map[img_path]
                         sub_dataset = datasets[sub_dataset_idx]
 
-                        # Build datalist boxes only from not-ignored instances (these are the GTs that should correspond to gt_instances)
-                        valid_instance_indices = [
-                            idx for idx, inst in enumerate(sub_dataset.data_list[dataset_data_idx]['instances'])
-                            if inst.get('ignore_flag', 0) == 0
-                        ]
+                        # IMPORTANT:
+                        # - `gt_idx` used by `gt_instances/assign_result` typically follows the dataset instance order.
+                        # - Do NOT remap indices through a "non-ignored" list for mapping; that can shrink the list and cause IndexError.
+                        inst_all = sub_dataset.data_list[dataset_data_idx]['instances']
+                        active_gt_indices = [i for i, inst in enumerate(inst_all) if inst.get('ignore_flag', 0) == 0]
 
                         # Need at least 2 GTs for containment relations
-                        if assign_result.num_gts >= 2 and len(valid_instance_indices) >= 2:
+                        if assign_result.num_gts >= 2 and len(active_gt_indices) >= 2:
                             # GT boxes/labels aligned with assign_result indexing
                             gt_boxes = gt_instances.bboxes.tensor
                             ann_labels_t = gt_instances.labels
 
                             # Index-based mapping: assume GT order matches the order of non-ignored instances in data_list.
-                            # We will use `inst_idx = valid_instance_indices[gt_idx]` when applying ignore_flag.
+                            # We will use direct indexing by gt_idx for ignore_flag.
 
                             # For each GT, infer a predicted label from its associated predictions
                             # If there are no associated preds, set pred label to -1 (skip filtering for that GT)
@@ -1255,8 +1237,8 @@ class MyHookCurrIntoFilterPredGT_Class_Relabel(Hook):
                             # For pairs where a smaller box is mostly inside a larger one, apply per-box rule:
                             # keep if pred==ann; otherwise ignore.
                             to_ignore_gt = set()
-                            for i_gt in range(assign_result.num_gts):
-                                for j_gt in range(assign_result.num_gts):
+                            for i_gt in active_gt_indices:
+                                for j_gt in active_gt_indices:
                                     if i_gt == j_gt:
                                         continue
                                     if areas[i_gt] > areas[j_gt]:
@@ -1266,24 +1248,21 @@ class MyHookCurrIntoFilterPredGT_Class_Relabel(Hook):
                                         pj = int(pred_labels_t[j_gt].item())
                                         ai = int(ann_labels_t[i_gt].item())
                                         aj = int(ann_labels_t[j_gt].item())
-
                                         if pi != -1 and pi != ai:
                                             to_ignore_gt.add(i_gt)
                                         if pj != -1 and pj != aj:
                                             to_ignore_gt.add(j_gt)
 
-                            # Apply ignore_flag to the underlying data_list using index-based mapping
+                            # Apply ignore_flag directly by gt_idx (dataset instance order)
                             applied = 0
                             for gt_idx in sorted(to_ignore_gt):
-                                if gt_idx >= len(valid_instance_indices):
-                                    # Safety: if counts mismatch, skip
+                                if gt_idx >= len(inst_all):
                                     print(
-                                        f"[CONTAIN-FILTER][WARN] gt_idx={gt_idx} out of range for valid_instance_indices "
-                                        f"(len={len(valid_instance_indices)}) img={os.path.basename(img_path)}"
+                                        f"[CONTAIN-FILTER][WARN] gt_idx={gt_idx} out of range for instances "
+                                        f"(len={len(inst_all)}) img={os.path.basename(img_path)}"
                                     )
                                     continue
-                                inst_idx = valid_instance_indices[gt_idx]
-                                sub_dataset.data_list[dataset_data_idx]['instances'][inst_idx]['ignore_flag'] = 1
+                                inst_all[gt_idx]['ignore_flag'] = 1
                                 contain_filtered_gt.add(gt_idx)
                                 applied += 1
 
