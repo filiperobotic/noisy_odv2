@@ -1556,12 +1556,13 @@ class MyHookCurrIntoFilterPredGT_Class_Relabel(Hook):
 
                     # Atualizar os labels corretamente usando o mapeamento
                     for gt_idx, valid_idx in enumerate(valid_instance_indices):
-                        sub_dataset.data_list[dataset_data_idx]['instances'][valid_idx]['bbox_label'] = updated_labels[gt_idx].item()
+                        sub_dataset.data_list[datasewet_data_idx]['instances'][valid_idx]['bbox_label'] = updated_labels[gt_idx].item()
                         # sub_dataset.data_list[dataset_data_idx]['instances'][valid_idx]['bbox_label'] = 10
             
 
             # só faz filter depois do warmup
-            if (runner.epoch + 1) >= self.filter_warmup:
+            #if (runner.epoch + 1) >= self.filter_warmup:
+            if (runner.epoch + 1) >= 0:
 
                 # filtering
                 #Unir todas as probabilidades das imagens e treinar o GMM**
@@ -1775,6 +1776,8 @@ class MyHookCurrIntoFilterPredGT_Class_Relabel(Hook):
                             # valid_idx = valid_instance_indices[gt_idx_list.index(gt_idx)]
                             #[TESTAR ESSE]
                             # import pdb; pdb.set_trace()
+                            if gt_idx >= len(valid_instance_indices):
+                                import pdb; pdb.set_trace()
                             valid_idx = valid_instance_indices[gt_idx]
 
                             # self.double_thr
