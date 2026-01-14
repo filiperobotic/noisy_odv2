@@ -1192,7 +1192,8 @@ class MyHookCurrIntoFilterPredGT_Class_Relabel(Hook):
                     # (NEW) Early-epoch containment-based filtering using
                     # prediction-vs-annotation disagreement (robust indexing)
                     # ------------------------------------------------------------
-                    if (runner.epoch + 1) <= self.overlap_filter_epochs and float(self.overlap_iou_thr) > 0.0:
+                    to_ignore_gt = set()
+                    if ((runner.epoch + 1) <= self.overlap_filter_epochs) and (float(self.overlap_iou_thr) > 0.0):
                         sub_dataset_idx, dataset_data_idx = dataset_img_map[img_path]
                         sub_dataset = datasets[sub_dataset_idx]
 
@@ -1233,7 +1234,7 @@ class MyHookCurrIntoFilterPredGT_Class_Relabel(Hook):
 
                             # For pairs where a smaller box is mostly inside a larger one, apply per-box rule:
                             # keep if pred==ann; otherwise ignore.
-                            to_ignore_gt = set()
+                            
                             for i_gt in active_gt_indices:
                                 for j_gt in active_gt_indices:
                                     if i_gt == j_gt:
@@ -1293,13 +1294,13 @@ class MyHookCurrIntoFilterPredGT_Class_Relabel(Hook):
 
                         #filipe2
                         if gt_idx  in to_ignore_gt:
-                            import pdb; pdb.set_trace()
+                            # import pdb; pdb.set_trace()
                             continue
                         #endfilipe2
 
                         # Skip GTs filtered by containment in early epochs (robust, no index guessing)
-                        if (runner.epoch + 1) <= self.overlap_filter_epochs and gt_idx in contain_filtered_gt:
-                            continue
+                        # if (runner.epoch + 1) <= self.overlap_filter_epochs and gt_idx in contain_filtered_gt:
+                        #     continue
                         associated_preds = assign_result.gt_inds.eq(gt_idx + 1).nonzero(as_tuple=True)[0]
                         sanity_count += 1
                         
