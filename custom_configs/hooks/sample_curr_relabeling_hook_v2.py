@@ -1254,13 +1254,15 @@ class MyHookCurrIntoFilterPredGT_Class_Relabel(Hook):
                             # Apply ignore_flag directly by gt_idx (dataset instance order)
                             applied = 0
                             for gt_idx in sorted(to_ignore_gt):
-                                if gt_idx >= len(inst_all):
-                                    print(
-                                        f"[CONTAIN-FILTER][WARN] gt_idx={gt_idx} out of range for instances "
-                                        f"(len={len(inst_all)}) img={os.path.basename(img_path)}"
-                                    )
-                                    continue
-                                inst_all[gt_idx]['ignore_flag'] = 1
+                                # if gt_idx >= len(inst_all):
+                                    # print(
+                                    #     f"[CONTAIN-FILTER][WARN] gt_idx={gt_idx} out of range for instances "
+                                    #     f"(len={len(inst_all)}) img={os.path.basename(img_path)}"
+                                    # )
+                                    # continue
+                                # inst_all[gt_idx]['ignore_flag'] = 1
+                                sub_dataset.data_list[dataset_data_idx]['instances'][gt_idx]['ignore_flag'] = 1
+                                
                                 contain_filtered_gt.add(gt_idx)
                                 applied += 1
 
@@ -1430,37 +1432,37 @@ class MyHookCurrIntoFilterPredGT_Class_Relabel(Hook):
                         
 
                         
-                        if (batch_idx <2):
+                        # if (batch_idx <2):
 
-                            if confident_preds.numel() > 0:
-                                # save_path = runner.work_dir + f'/debug_imgs/{os.path.basename(img_path[:-4])}_ep{runner.epoch + 1}_gt{gt_idx}_relabeled.jpg'
-                                # desenhar_bboxesv3_pred(inputs[i], gt_instances,pred_instances,assign_result.max_overlaps, important_associated_ids,  updated_labels[gt_idx].cpu().item(), save_path=save_path)  
-                                pass
+                        #     if confident_preds.numel() > 0:
+                        #         # save_path = runner.work_dir + f'/debug_imgs/{os.path.basename(img_path[:-4])}_ep{runner.epoch + 1}_gt{gt_idx}_relabeled.jpg'
+                        #         # desenhar_bboxesv3_pred(inputs[i], gt_instances,pred_instances,assign_result.max_overlaps, important_associated_ids,  updated_labels[gt_idx].cpu().item(), save_path=save_path)  
+                        #         pass
                             
                             
                                 
-                            elif len(associated_preds) > 1 and (max_score_val > 0.45) :
-                                labels_group = myscores.argmax(dim=1)
+                        #     elif len(associated_preds) > 1 and (max_score_val > 0.45) :
+                        #         labels_group = myscores.argmax(dim=1)
                             
-                                # _, qtd = Counter(labels_group.tolist()).most_common(1)[0]
-                                most_common_label, qtd = Counter(labels_group.tolist()).most_common(1)[0]
+                        #         # _, qtd = Counter(labels_group.tolist()).most_common(1)[0]
+                        #         most_common_label, qtd = Counter(labels_group.tolist()).most_common(1)[0]
 
-                                scores_most_common = myscores[:,most_common_label]
-                                confident_most_common =  associated_preds[scores_most_common> 0.45]
+                        #         scores_most_common = myscores[:,most_common_label]
+                        #         confident_most_common =  associated_preds[scores_most_common> 0.45]
                                 
-                                # import pdb; pdb.set_trace()
-                                # verifica se a quantidade é maior que 50% do total
-                                if qtd > (len(associated_preds) / 2)  and len(confident_most_common) > 2:
-                                    save_path = runner.work_dir + f'/debug_imgs/{os.path.basename(img_path[:-4])}_ep{runner.epoch + 1}_gt{gt_idx}_grouped.jpg'
-                                    #desenhar_bboxesv3_pred(inputs[i], gt_instances,pred_instances,assign_result.max_overlaps, important_associated_ids,  updated_labels[gt_idx].cpu().item(), save_path=save_path)  
-                                    desenhar_bboxesv3_pred(inputs[i], gt_instances,pred_instances,assign_result.max_overlaps, associated_preds,  updated_labels[gt_idx].cpu().item(), save_path=save_path)  
+                        #         # import pdb; pdb.set_trace()
+                        #         # verifica se a quantidade é maior que 50% do total
+                        #         if qtd > (len(associated_preds) / 2)  and len(confident_most_common) > 2:
+                        #             save_path = runner.work_dir + f'/debug_imgs/{os.path.basename(img_path[:-4])}_ep{runner.epoch + 1}_gt{gt_idx}_grouped.jpg'
+                        #             #desenhar_bboxesv3_pred(inputs[i], gt_instances,pred_instances,assign_result.max_overlaps, important_associated_ids,  updated_labels[gt_idx].cpu().item(), save_path=save_path)  
+                        #             desenhar_bboxesv3_pred(inputs[i], gt_instances,pred_instances,assign_result.max_overlaps, associated_preds,  updated_labels[gt_idx].cpu().item(), save_path=save_path)  
 
-                            else:
+                        #     else:
                                                                 
-                                save_path = runner.work_dir + f'/debug_imgs/{os.path.basename(img_path[:-4])}_ep{runner.epoch + 1}_gt{gt_idx}_not_relabel.jpg'
-                                #desenhar_bboxesv3_pred(inputs[i], gt_instances,pred_instances,assign_result.max_overlaps, important_associated_ids, updated_labels[gt_idx].cpu().item(), save_path=f'debug_imgs/{os.path.basename(img_path[:-4])}_ep{runner.epoch + 1}_gt{gt_idx}_not_relabel.jpg')  
-                                #desenhar_bboxesv3_pred(inputs[i], gt_instances,pred_instances,assign_result.max_overlaps, important_associated_ids, updated_labels[gt_idx].cpu().item(), save_path=save_path)  
-                                desenhar_bboxesv3_pred(inputs[i], gt_instances,pred_instances,assign_result.max_overlaps, associated_preds, updated_labels[gt_idx].cpu().item(), save_path=save_path)  
+                        #         save_path = runner.work_dir + f'/debug_imgs/{os.path.basename(img_path[:-4])}_ep{runner.epoch + 1}_gt{gt_idx}_not_relabel.jpg'
+                        #         #desenhar_bboxesv3_pred(inputs[i], gt_instances,pred_instances,assign_result.max_overlaps, important_associated_ids, updated_labels[gt_idx].cpu().item(), save_path=f'debug_imgs/{os.path.basename(img_path[:-4])}_ep{runner.epoch + 1}_gt{gt_idx}_not_relabel.jpg')  
+                        #         #desenhar_bboxesv3_pred(inputs[i], gt_instances,pred_instances,assign_result.max_overlaps, important_associated_ids, updated_labels[gt_idx].cpu().item(), save_path=save_path)  
+                        #         desenhar_bboxesv3_pred(inputs[i], gt_instances,pred_instances,assign_result.max_overlaps, associated_preds, updated_labels[gt_idx].cpu().item(), save_path=save_path)  
                             
 
                         
@@ -1744,27 +1746,27 @@ class MyHookCurrIntoFilterPredGT_Class_Relabel(Hook):
                         
                         # if (related_global_index in all_classes_low_confidence_scores_global_idx) and (allbb_preds_map[img_path][gt_idx]['pred'] < 0.3):
                         if (related_global_index in all_classes_low_confidence_scores_global_idx) and (allbb_preds_map[img_path][gt_idx]['pred'] < self.filter_thr):
-                            if my_counter<5:
+                            # if my_counter<5:
 
                                                               
-                                import shutil
+                                # import shutil
 
-                                # Tenta encontrar o arquivo com sufixo '_relabel.jpg' ou '_not_relabel.jpg'
+                                # # Tenta encontrar o arquivo com sufixo '_relabel.jpg' ou '_not_relabel.jpg'
                                 
-                                base_prefix = f"{runner.work_dir}/debug_imgs/{os.path.basename(img_path[:-4])}_ep{runner.epoch + 1}_gt{gt_idx}"
-                                possible_suffixes = ["_relabeled.jpg", "_not_relabel.jpg", "_grouped.jpg"]
+                                # base_prefix = f"{runner.work_dir}/debug_imgs/{os.path.basename(img_path[:-4])}_ep{runner.epoch + 1}_gt{gt_idx}"
+                                # possible_suffixes = ["_relabeled.jpg", "_not_relabel.jpg", "_grouped.jpg"]
 
-                                for suffix in possible_suffixes:
+                                # for suffix in possible_suffixes:
                                     
-                                    base_debug_path = base_prefix + suffix
-                                    if os.path.exists(base_debug_path):
-                                        my_counter+=1 
-                                        filtered_debug_path = base_debug_path[:-4] + "_filtered.jpg"
-                                        # if suffix == "_relabeled.jpg":
-                                        #     import pdb; pdb.set_trace()
-                                        shutil.copy(base_debug_path, filtered_debug_path)
-                                        print(f"[INFO] Cópia criada: {filtered_debug_path}")
-                                        break  # Para no primeiro que encontrar 
+                                #     base_debug_path = base_prefix + suffix
+                                #     if os.path.exists(base_debug_path):
+                                #         my_counter+=1 
+                                #         filtered_debug_path = base_debug_path[:-4] + "_filtered.jpg"
+                                #         # if suffix == "_relabeled.jpg":
+                                #         #     import pdb; pdb.set_trace()
+                                #         shutil.copy(base_debug_path, filtered_debug_path)
+                                #         print(f"[INFO] Cópia criada: {filtered_debug_path}")
+                                #         break  # Para no primeiro que encontrar 
 
                                 # desenhar_bboxesv3_filtered(all_inputs_map[img_path], sub_dataset.data_list[dataset_data_idx]['instances'], save_path=f'debug_imgs/{os.path.basename(img_path[:-4])}_ep{runner.epoch + 1}_gt{gt_idx}_filtered.jpg')  
                             # Encontrar `valid_idx` correspondente ao `gt_idx`
