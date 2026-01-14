@@ -543,17 +543,12 @@ class MyHookCurrIouFilterPredGT_Class_Relabel(Hook):
 
                     # **Vetorização do processo de associação**
                     for gt_idx in range(assign_result.num_gts):
-                        # Skip GTs that were overlap-filtered in early epochs
+                        # Skip GTs already marked ignored in the dataset instances (early epochs)
                         if (runner.epoch + 1) <= self.overlap_filter_epochs:
-                            # recompute current valid_instance_indices from data_list (ignore_flag already updated)
                             sub_dataset_idx, dataset_data_idx = dataset_img_map[img_path]
                             sub_dataset = datasets[sub_dataset_idx]
-                            valid_instance_indices = [
-                                idx for idx, inst in enumerate(sub_dataset.data_list[dataset_data_idx]['instances'])
-                                if inst.get('ignore_flag', 0) == 0
-                            ]
-                            # If this gt_idx is beyond the remaining valid GT count, skip safely
-                            if gt_idx >= len(valid_instance_indices):
+                            inst_all = sub_dataset.data_list[dataset_data_idx]['instances']
+                            if gt_idx < len(inst_all) and inst_all[gt_idx].get('ignore_flag', 0) == 1:
                                 continue
                         associated_preds = assign_result.gt_inds.eq(gt_idx + 1).nonzero(as_tuple=True)[0]
                         sanity_count += 1
@@ -803,13 +798,13 @@ class MyHookCurrIouFilterPredGT_Class_Relabel(Hook):
                     sub_dataset_idx, dataset_data_idx = dataset_img_map[img_path]
                     sub_dataset = datasets[sub_dataset_idx]
 
-                    # Criar uma lista para mapear os índices corretos das instâncias que NÃO são ignoradas
-                    valid_instance_indices = [idx for idx, inst in enumerate(sub_dataset.data_list[dataset_data_idx]['instances']) if inst['ignore_flag'] == 0]
-
-                    # Atualizar os labels corretamente usando o mapeamento
-                    for gt_idx, valid_idx in enumerate(valid_instance_indices):
-                        sub_dataset.data_list[dataset_data_idx]['instances'][valid_idx]['bbox_label'] = updated_labels[gt_idx].item()
-                        # sub_dataset.data_list[dataset_data_idx]['instances'][valid_idx]['bbox_label'] = 10
+                    inst_all = sub_dataset.data_list[dataset_data_idx]['instances']
+                    N_upd = min(assign_result.num_gts, len(inst_all), int(updated_labels.numel()))
+                    for gt_idx in range(N_upd):
+                        # only update active (non-ignored) instances
+                        if inst_all[gt_idx].get('ignore_flag', 0) == 1:
+                            continue
+                        inst_all[gt_idx]['bbox_label'] = int(updated_labels[gt_idx].item())
             
 
             # só faz filter depois do warmup
@@ -1033,6 +1028,8 @@ class MyHookCurrIouFilterPredGT_Class_Relabel(Hook):
                             
                         # index += 1
                         
+        # --- Remove all remaining occurrences of valid_instance_indices[gt_idx] ---
+        # (Handled in above blocks. If any remain, replace with robust mapping below.)
 
             print(f"[DEBUG] Atualização finalizada para a época {runner.epoch + 1}")
 
@@ -6112,3 +6109,10 @@ class MyHookFilterKNN_Class_Relabel(Hook):
 
 #     def after_train_epoch(self, runner, batch_idx, data_batch, outputs):
 #         # import pdb; pdb.set_trace()
+        # (If you find: valid_instance_indices[gt_idx], replace with:
+        # inst_all = sub_dataset.data_list[dataset_data_idx]['instances']
+        # if gt_idx >= len(inst_all):
+        #     print(f"[MAP][WARN] gt_idx={gt_idx} out of range for instances (len={len(inst_all)}) img={os.path.basename(img_path)}")
+        #     continue
+        # valid_idx = gt_idx
+        # )
