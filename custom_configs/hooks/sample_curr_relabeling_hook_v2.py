@@ -1776,9 +1776,12 @@ class MyHookCurrIntoFilterPredGT_Class_Relabel(Hook):
                             # valid_idx = valid_instance_indices[gt_idx_list.index(gt_idx)]
                             #[TESTAR ESSE]
                             # import pdb; pdb.set_trace()
-                            if gt_idx >= len(valid_instance_indices):
-                                import pdb; pdb.set_trace()
-                            valid_idx = valid_instance_indices[gt_idx]
+
+                            # if gt_idx >= len(valid_instance_indices):
+                            #     import pdb; pdb.set_trace()
+
+                            #valid_idx = valid_instance_indices[gt_idx]
+                            valid_idx = gt_idx # alterei pra nao dar bug. Na pratica o id real dele já é o idx. Do jeito que tava antes, funcionava se nunca tivesse ignore_flag=1, mas como agora tem, tinha deixado de funcionar
 
                             # self.double_thr
                             if allbb_preds_map[img_path][gt_idx]['max_pred'] >= self.double_thr:
