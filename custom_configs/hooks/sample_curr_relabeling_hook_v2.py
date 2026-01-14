@@ -1556,7 +1556,7 @@ class MyHookCurrIntoFilterPredGT_Class_Relabel(Hook):
 
                     # Atualizar os labels corretamente usando o mapeamento
                     for gt_idx, valid_idx in enumerate(valid_instance_indices):
-                        sub_dataset.data_list[datasewet_data_idx]['instances'][valid_idx]['bbox_label'] = updated_labels[gt_idx].item()
+                        sub_dataset.data_list[dataset_data_idx]['instances'][valid_idx]['bbox_label'] = updated_labels[gt_idx].item()
                         # sub_dataset.data_list[dataset_data_idx]['instances'][valid_idx]['bbox_label'] = 10
             
 
