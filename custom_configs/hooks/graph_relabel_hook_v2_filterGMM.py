@@ -1320,46 +1320,58 @@ class MyHookGraphNoiseRelabelFilterGMM(Hook):
                                                 img_np = cv2.flip(img_np, 1)
                                             if 'vertical' in fd:
                                                 img_np = cv2.flip(img_np, 0)
-                                # desenha GTs associados com cor conforme noise
+                                # desenha GTs associados com cores: verde=concorda, vermelho=filtrado, azul=reanotado
                                 sel_gt_xyxy_np = sel_gt_xyxy.detach().cpu().numpy().astype(int)
-                                for local_idx in range(min(len(node_img_local_to_valid), len(p_noise_np))):
+
+                                # conjuntos de relabel desta época (Phase-2 agreement) e Phase-1 (high confidence)
+                                relabeled_pairs = relabeled_pairs if 'relabeled_pairs' in locals() else []
+                                relabeled_set = set([int(i) for (i, _) in relabeled_pairs])
+
+                                phase1_map_for_img = self._phase1_relabels.get(img_path, {})  # {gt_local_idx -> old_lab}
+                                relabel_high_set = set()
+                                for local_idx, gt_local_idx in enumerate(node_img_local_to_valid[:len(sel_gt_xyxy_np)]):
+                                    if int(gt_local_idx) in phase1_map_for_img:
+                                        relabel_high_set.add(int(local_idx))
+
+                                # desenhar apenas para os nós existentes
+                                L_vis = min(len(sel_gt_xyxy_np), pr.shape[0], node_labels_t.shape[0], len(node_img_local_to_valid))
+                                for local_idx in range(L_vis):
                                     x1, y1, x2, y2 = sel_gt_xyxy_np[local_idx].tolist()
-                                    is_noisy = bool(noisy_mask[local_idx])
-                                    is_kld = bool(noisy_kld[local_idx])
-                                    # prioridade de cor: relabel (AZUL/Fase-2) > relabel-high (ROSA/Fase-1) > noisy (VERMELHO) > KLD alto vetado (LARANJA) > discordância (AMARELO) > limpo (VERDE)
-                                    if local_idx in relabeled_set:
-                                        color = (255, 0, 0)            # AZUL (reanotado pela rede de grafos / Phase-2)
-                                    elif local_idx in relabel_high_set:
-                                        color = (255, 105, 180)        # ROSA (reanotado na Phase-1: alta confiança do modelo)
-                                    elif 'disagree_mask' in locals() and local_idx < len(disagree_mask) and bool(disagree_mask[local_idx]):
-                                        color = (0, 255, 255)          # AMARELO (pred != label atual)
+
+                                    # ann/pred/prob
+                                    ann_lab = int(node_labels_t[local_idx].item())
+                                    pred_lab = int(pr[local_idx].argmax().item())
+                                    prob = float(pr[local_idx].max().item())
+
+                                    # recuperar ignore_flag do dataset (usa mapeamento por índice/ordem das instâncias válidas)
+                                    gt_idx = int(node_img_local_to_valid[local_idx])
+                                    ignore_flag = 0
+                                    if gt_idx < len(valid_instance_indices):
+                                        _inst_idx = valid_instance_indices[gt_idx]
+                                        try:
+                                            ignore_flag = int(subds.data_list[d_idx]['instances'][_inst_idx].get('ignore_flag', 0))
+                                        except Exception:
+                                            ignore_flag = 0
+
+                                    is_relabeled = (local_idx in relabeled_set) or (local_idx in relabel_high_set)
+                                    is_agree = (pred_lab == ann_lab)
+
+                                    # prioridade de cor: filtrado (vermelho) > reanotado (azul) > concorda (verde) > discordante (amarelo)
+                                    if ignore_flag == 1:
+                                        color = (0, 0, 255)      # vermelho
+                                    elif is_relabeled:
+                                        color = (255, 0, 0)      # azul
+                                    elif is_agree:
+                                        color = (0, 255, 0)      # verde
                                     else:
-                                        color = (0, 255, 0)            # VERDE
+                                        color = (0, 255, 255)    # amarelo (discorda, mas não foi filtrado/relabel)
 
                                     cv2.rectangle(img_np, (x1, y1), (x2, y2), color, 2)
-                                    # obter classes GT/pred, KLD e pmax para overlay
-                                    _gt_lab = int(node_labels[local_idx])
-                                    _pred_lab = int(pr[local_idx].argmax().item())
-                                    _kld = float(kld_np[local_idx])
-                                    _pmax = float(pr[local_idx].max().item())
-                                    _co = float(best_np[local_idx]) if 'best_np' in locals() and local_idx < len(best_np) else 0.0
-                                    # Adiciona classe esperada pelo contexto (ctx) usando qc.argmax(dim=1)
-                                    _ctx_lab = int(qc[local_idx].argmax().item()) if qc is not None and local_idx < qc.shape[0] else -1
-                                    _v_eq = bool(veto_eq_np[local_idx]) if 'veto_eq_np' in locals() and local_idx < len(veto_eq_np) else False
-                                    _old2 = old_gt_map.get(local_idx, None)                 # Phase-2 old label (ConG)
-                                    _old1 = old_gt_map_phase1.get(local_idx, None)          # Phase-1 old label (high confidence)
-                                    # Preferir mostrar o marcador correspondente à cor aplicada
-                                    if local_idx in relabeled_set and _old2 is not None:
-                                        rx_suffix = f"|R{_old2}"
-                                    elif local_idx in relabel_high_set and _old1 is not None:
-                                        rx_suffix = f"|R{_old1}"
-                                    else:
-                                        rx_suffix = ""
-                                    _overlay_txt = f"gt{_gt_lab}|p{_pred_lab}|n{float(p_noise_np[local_idx]):.2f}|k{_kld:.2f}|s{_pmax:.2f}|c{_co:.2f}|ct{_ctx_lab}{rx_suffix}"
+                                    txt = f"ann={ann_lab} pred={pred_lab} p={prob:.2f}"
                                     cv2.putText(img_np,
-                                                _overlay_txt,
-                                                (max(0, x1), max(15, y1-4)),
-                                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                                                txt,
+                                                (max(0, x1), max(15, y1 - 4)),
+                                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
                                 # Converte BGR (OpenCV) → RGB antes de enviar ao W&B
                                 img_rgb = cv2.cvtColor(img_np, cv2.COLOR_BGR2RGB)
                                 self._wandb_imgs.append(
@@ -3362,10 +3374,38 @@ class MyHookGraphNoiseRelabelFilterGMMSanity(Hook):
                             
                             
                         
-                    
-                    
+            
 
-        print(f"[DEBUG] Atualização finalizada para a época {runner.epoch + 1}")
+# ---- Helper: draw GT boxes with color-coded status for W&B logging ----
+def _draw_detection_overlay_voc(img_bgr: np.ndarray,
+                               boxes_xyxy: np.ndarray,
+                               ann_labels: list,
+                               pred_labels: list,
+                               pred_probs: list,
+                               status: list) -> np.ndarray:
+    """Draw GT boxes with colors by status.
+
+    status values: 'agree' (green), 'filtered' (red), 'relabeled' (blue), 'disagree' (yellow).
+    Boxes are expected in xyxy int coordinates in the same image space.
+    """
+    out = img_bgr.copy()
+    for k in range(len(boxes_xyxy)):
+        x1, y1, x2, y2 = boxes_xyxy[k]
+        st = status[k]
+        if st == 'filtered':
+            color = (0, 0, 255)          # red
+        elif st == 'relabeled':
+            color = (255, 0, 0)          # blue
+        elif st == 'agree':
+            color = (0, 255, 0)          # green
+        else:
+            color = (0, 255, 255)        # yellow (disagree but not filtered/relabel)
+
+        cv2.rectangle(out, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
+        txt = f"ann={ann_labels[k]} pred={pred_labels[k]} p={pred_probs[k]:.2f}"
+        tx, ty = int(x1), max(0, int(y1) - 5)
+        cv2.putText(out, txt, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2, cv2.LINE_AA)
+    return out
 
 # === Lightweight GNN noise filter hook ===
 @HOOKS.register_module()
@@ -4910,83 +4950,105 @@ class MyHookGraphNoiseRelabelFilterGMMSanityDebug(Hook):
                 sub_dataset_idx, dataset_data_idx = dataset_img_map[img_path]
                 sub_dataset = datasets[sub_dataset_idx]
 
-
                 valid_instance_indices = [
                     idx for idx, inst in enumerate(sub_dataset.data_list[dataset_data_idx]['instances'])
                     if inst['ignore_flag'] == 0
                 ]
 
                 # **Mapear GTs reais na ordem correta**
-                gt_idx_list = all_gt_idx_map[img_path]  
-
-                
-                
+                gt_idx_list = all_gt_idx_map[img_path]
 
                 for gt_idx in gt_idx_list:
-                # for gt_idx in valid_instance_indices:
-
-                    related_global_index = allbb_preds_map[img_path][gt_idx]['global_index_counter']  
-
-                    
-
-                    #if index in low_confidence_indices:
-                    #if related_global_index in all_classes_low_confidence_scores_global_idx:
-                    # if low confidence and not too high confident
-                    #if (related_global_index in all_classes_low_confidence_scores_global_idx) and (allbb_preds_map[img_path][gt_idx]['pred'] < self.relabel_conf):
-                    #if (related_global_index in all_classes_low_confidence_scores_global_idx) and (allbb_preds_map[img_path][gt_idx]['pred'] < 0.5):
-                    
-                    # if (related_global_index in all_classes_low_confidence_scores_global_idx) and (allbb_preds_map[img_path][gt_idx]['pred'] < 0.3):
+                    related_global_index = allbb_preds_map[img_path][gt_idx]['global_index_counter']
                     if (related_global_index in all_classes_low_confidence_scores_global_idx) and (allbb_preds_map[img_path][gt_idx]['pred'] < self.filter_thr):
-                        # if my_counter<5:
-
-                                                            
-                        #     import shutil
-
-                        #     # Tenta encontrar o arquivo com sufixo '_relabel.jpg' ou '_not_relabel.jpg'
-                            
-                        #     base_prefix = f"{runner.work_dir}/debug_imgs/{os.path.basename(img_path[:-4])}_ep{runner.epoch + 1}_gt{gt_idx}"
-                        #     possible_suffixes = ["_relabeled.jpg", "_not_relabel.jpg", "_grouped.jpg"]
-
-                        #     for suffix in possible_suffixes:
-                                
-                        #         base_debug_path = base_prefix + suffix
-                        #         if os.path.exists(base_debug_path):
-                        #             my_counter+=1 
-                        #             filtered_debug_path = base_debug_path[:-4] + "_filtered.jpg"
-                        #             # if suffix == "_relabeled.jpg":
-                        #             #     import pdb; pdb.set_trace()
-                        #             shutil.copy(base_debug_path, filtered_debug_path)
-                        #             print(f"[INFO] Cópia criada: {filtered_debug_path}")
-                        #             break  # Para no primeiro que encontrar 
-
-                        #     # desenhar_bboxesv3_filtered(all_inputs_map[img_path], sub_dataset.data_list[dataset_data_idx]['instances'], save_path=f'debug_imgs/{os.path.basename(img_path[:-4])}_ep{runner.epoch + 1}_gt{gt_idx}_filtered.jpg')  
-                        # # Encontrar `valid_idx` correspondente ao `gt_idx`
-                        # if gt_idx in gt_idx_list:
-                        #[ME PARECE ERRADO]
-                        # valid_idx = valid_instance_indices[gt_idx_list.index(gt_idx)]
-                        #[TESTAR ESSE]
-                        # import pdb; pdb.set_trace()
                         valid_idx = valid_instance_indices[gt_idx]
-
-                        # self.double_thr
-                        # if allbb_preds_map[img_path][gt_idx]['max_pred'] >= self.double_thr:
-                        #     #update
-                        #     sub_dataset.data_list[dataset_data_idx]['instances'][valid_idx]['bbox_label'] = allbb_preds_map[img_path][gt_idx]['pred_label']
-                        # else:    
-                            #filtra
                         sub_dataset.data_list[dataset_data_idx]['instances'][valid_idx]['ignore_flag'] = 1
 
-                        
-                        
-                    
-                
-                            
-                            
-                        
-                    
-                    
+                # ---- W&B: log detection examples with color-coded GT boxes (after GMM filtering) ----
+                if self.use_wandb and (wandb is not None) and self._wandb_ready and (self._wandb_img_budget > 0):
+                    try:
+                        # read original image (VOC boxes are in original image coords)
+                        img_np = cv2.imread(img_path, cv2.IMREAD_COLOR)
+                        if img_np is None:
+                            raise RuntimeError(f"Could not read image: {img_path}")
 
-        print(f"[DEBUG] Atualização finalizada para a época {runner.epoch + 1}")
+                        # use ALL instances (including ignored) for visualization
+                        inst_all = sub_dataset.data_list[dataset_data_idx]['instances']
+                        boxes = []
+                        ann = []
+                        pred = []
+                        prob = []
+                        st = []
+
+                        # For mapping instance-local order -> gt_idx used in allbb_preds_map, we rely on VOC order consistency.
+                        # We build a list of instance indices that are NOT ignored to align with gt_idx indexing.
+                        non_ignored = [ii for ii, inst in enumerate(inst_all) if inst.get('ignore_flag', 0) == 0]
+
+                        for inst_i, inst in enumerate(inst_all):
+                            bb = inst.get('bbox', None)
+                            if bb is None:
+                                continue
+                            # bbox assumed xyxy
+                            x1, y1, x2, y2 = bb
+                            boxes.append([int(x1), int(y1), int(x2), int(y2)])
+
+                            # annotation label (prefer bbox_label/label/labels)
+                            ann_lab = None
+                            for key in ['bbox_label', 'label', 'labels']:
+                                if key in inst:
+                                    ann_lab = int(inst[key])
+                                    break
+                            if ann_lab is None:
+                                ann_lab = int(inst.get('gt_label', -1))
+                            ann.append(ann_lab)
+
+                            # predicted label/prob: use allbb_preds_map if possible
+                            # Determine gt_idx for this instance in the current epoch ordering:
+                            # If ignored, it may not exist in allbb_preds_map; fall back to -1.
+                            gt_local = -1
+                            if inst.get('ignore_flag', 0) == 0:
+                                # find position of this instance among non-ignored
+                                try:
+                                    gt_local = non_ignored.index(inst_i)
+                                except ValueError:
+                                    gt_local = -1
+
+                            if (gt_local != -1) and (gt_local in allbb_preds_map.get(img_path, {})):
+                                info = allbb_preds_map[img_path][gt_local]
+                                pred_lab = int(info.get('pred_label', -1))
+                                p = float(info.get('max_pred', info.get('pred', 0.0)))
+                                is_rel = bool(info.get('filtered', False))
+                            else:
+                                pred_lab = -1
+                                p = 0.0
+                                is_rel = False
+
+                            pred.append(pred_lab)
+                            prob.append(p)
+
+                            if inst.get('ignore_flag', 0) == 1:
+                                st.append('filtered')
+                            elif is_rel:
+                                st.append('relabeled')
+                            else:
+                                st.append('agree' if (pred_lab != -1 and pred_lab == ann_lab) else 'disagree')
+
+                        if len(boxes) > 0:
+                            overlay = _draw_detection_overlay_voc(
+                                img_np,
+                                np.array(boxes, dtype=np.int32),
+                                ann_labels=ann,
+                                pred_labels=pred,
+                                pred_probs=prob,
+                                status=st
+                            )
+                            # log a single image per sample
+                            self._wandb_imgs.append(wandb.Image(overlay, caption=f"{os.path.basename(img_path)} ep={runner.epoch+1}"))
+                            self._wandb_img_budget -= 1
+                    except Exception as e:
+                        # don't break training if logging fails
+                        if hasattr(runner, 'logger'):
+                            runner.logger.warning(f"[W&B][detections] Failed to log {os.path.basename(img_path)}: {e}")
 
         
         
@@ -7311,3 +7373,14 @@ class MyHookFilterPredGT_Class_Relabel(Hook):
                         
 
             print(f"[DEBUG] Atualização finalizada para a época {runner.epoch + 1}")
+
+        print(f"[DEBUG] Atualização finalizada para a época {runner.epoch + 1}")
+
+        # ---- W&B: flush detection images collected (color-coded overlays) ----
+        if self.use_wandb and (wandb is not None) and self._wandb_ready and len(self._wandb_imgs) > 0:
+            try:
+                wandb.log({"detections_examples": self._wandb_imgs, "epoch": runner.epoch + 1}, commit=True)
+            except Exception as e:
+                if hasattr(runner, 'logger'):
+                    runner.logger.warning(f"[W&B][detections] Failed to flush images: {e}")
+            self._wandb_imgs = []
