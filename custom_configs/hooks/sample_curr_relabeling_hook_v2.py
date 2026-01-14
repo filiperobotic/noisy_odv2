@@ -1290,6 +1290,13 @@ class MyHookCurrIntoFilterPredGT_Class_Relabel(Hook):
 
                     # **Vetorização do processo de associação**
                     for gt_idx in range(assign_result.num_gts):
+
+                        #filipe2
+                        if gt_idx  in to_ignore_gt:
+                            import pdb; pdb.set_trace()
+                            continue
+                        #endfilipe2
+
                         # Skip GTs filtered by containment in early epochs (robust, no index guessing)
                         if (runner.epoch + 1) <= self.overlap_filter_epochs and gt_idx in contain_filtered_gt:
                             continue
