@@ -1193,7 +1193,7 @@ class MyHookCurrIntoFilterPredGT_Class_Relabel(Hook):
                     # prediction-vs-annotation disagreement (robust indexing)
                     # ------------------------------------------------------------
                     to_ignore_gt = set()
-                    if ((runner.epoch + 1) <= self.overlap_filter_epochs) and (float(self.overlap_iou_thr) > 0.0):
+                    if ((runner.epoch + 1) <= self.overlap_filter_epochs) and  ((runner.epoch + 1) >= self.filter_warmup) and (float(self.overlap_iou_thr) > 0.0):
                         sub_dataset_idx, dataset_data_idx = dataset_img_map[img_path]
                         sub_dataset = datasets[sub_dataset_idx]
 
@@ -1561,8 +1561,8 @@ class MyHookCurrIntoFilterPredGT_Class_Relabel(Hook):
             
 
             # só faz filter depois do warmup
-            #if (runner.epoch + 1) >= self.filter_warmup:
-            if (runner.epoch + 1) >= 0:
+            if (runner.epoch + 1) >= self.filter_warmup:
+            # if (runner.epoch + 1) >= 0:
 
                 # filtering
                 #Unir todas as probabilidades das imagens e treinar o GMM**
