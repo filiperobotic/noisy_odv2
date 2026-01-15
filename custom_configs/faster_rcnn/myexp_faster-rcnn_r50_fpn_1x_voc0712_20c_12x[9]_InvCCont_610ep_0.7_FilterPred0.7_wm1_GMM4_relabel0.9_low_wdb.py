@@ -24,8 +24,8 @@ numGMM = 4
 filter_type = 'pred'
 # overlap_filter_epochs=5
 overlap_cont_thr=0.7
-overlap_filter_start=6,    # Começa na época 6
-overlap_filter_end=10,     # Termina na época 10
+overlap_filter_start=6   # Começa na época 6
+overlap_filter_end=10     # Termina na época 10
 
 #
 
