@@ -2050,9 +2050,13 @@ class MyHookReverseCurrIntoFilterPredGT_Class_Relabel(Hook):
                             # No final do containment filtering block
                             if applied > 0:
                                 total_in_epoch = sum(len(l) for l in all_gt_idx_map.values())
-                                print(f"[OVERLAP-FILTER] ep={runner.epoch + 1}: "
-                                    f"filtered {applied}/{total_in_epoch} GTs "
-                                    f"({100*applied/total_in_epoch:.1f}%)")
+                                if total_in_epoch > 0:  # Adiciona verificação
+                                    print(f"[OVERLAP-FILTER] ep={runner.epoch + 1}: "
+                                        f"filtered {applied}/{total_in_epoch} GTs "
+                                        f"({100*applied/total_in_epoch:.1f}%)")
+                                else:
+                                    print(f"[OVERLAP-FILTER] ep={runner.epoch + 1}: "
+                                        f"filtered {applied} GTs (total_in_epoch=0)")
 
 
                     # Criar lista de GTs para esta imagem
