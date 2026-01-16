@@ -20,6 +20,160 @@ import matplotlib.pyplot as plt
 import cv2
 import os
 
+# ============================================================================
+# Funções Auxiliares para Box-Level Curriculum e Spatial Refinement
+# ============================================================================
+
+def compute_box_difficulty(box_i, all_boxes, box_i_idx=None):
+    """
+    Calcula dificuldade de um box baseado em contaminação espacial.
+    
+    Args:
+        box_i: tensor [4] (x1, y1, x2, y2) do box alvo
+        all_boxes: tensor [N, 4] com todos os boxes da imagem
+        box_i_idx: int, índice do box_i em all_boxes (para pular ele mesmo)
+    
+    Returns:
+        float: difficulty score [0, 1]
+    """
+    difficulty = 0.0
+    
+    # Calcula área do box_i
+    area_i = (box_i[2] - box_i[0]) * (box_i[3] - box_i[1])
+    
+    if area_i <= 0:
+        return 0.0
+    
+    for j, box_j in enumerate(all_boxes):
+        # Pula o próprio box
+        if box_i_idx is not None and j == box_i_idx:
+            continue
+        
+        # Calcula IoU
+        x1_inter = max(box_i[0], box_j[0])
+        y1_inter = max(box_i[1], box_j[1])
+        x2_inter = min(box_i[2], box_j[2])
+        y2_inter = min(box_i[3], box_j[3])
+        
+        inter_w = max(0, x2_inter - x1_inter)
+        inter_h = max(0, y2_inter - y1_inter)
+        inter_area = inter_w * inter_h
+        
+        if inter_area <= 0:
+            continue
+        
+        area_j = (box_j[2] - box_j[0]) * (box_j[3] - box_j[1])
+        
+        if area_j <= 0:
+            continue
+        
+        iou = inter_area / (area_i + area_j - inter_area)
+        
+        if iou > 0.0:
+            # Se box_j é maior e tem overlap
+            # → Features de box_i estão contaminadas por box_j
+            if area_j > area_i:
+                contamination = iou * min(area_j / area_i, 2.0)  # Cap em 2.0
+                difficulty += min(contamination, 1.0)
+            
+            # Se overlap é muito alto (>0.5), sempre aumenta dificuldade
+            if iou > 0.5:
+                difficulty += 0.5
+    
+    # Normaliza [0, 1]
+    return min(difficulty, 1.0)
+
+
+def spatial_aware_relabeling(boxes, pred_labels, pred_scores, difficulty_threshold=0.5):
+    """
+    Refinamento de labels para boxes com alta contaminação espacial.
+    
+    Args:
+        boxes: tensor [N, 4] - bounding boxes em xyxy
+        pred_labels: tensor [N] - labels preditas
+        pred_scores: tensor [N, num_classes] - scores de probabilidade (após softmax)
+        difficulty_threshold: float - só refina se difficulty > threshold
+    
+    Returns:
+        refined_labels: tensor [N] - labels refinadas
+        refinement_stats: dict - estatísticas do refinamento
+    """
+    refined_labels = pred_labels.clone()
+    
+    stats = {
+        'total_boxes': len(boxes),
+        'high_contamination': 0,
+        'refinements_applied': 0,
+    }
+    
+    for i, box_i in enumerate(boxes):
+        # Calcula contaminação deste box
+        difficulty = compute_box_difficulty(box_i, boxes, box_i_idx=i)
+        
+        # Só refina se dificuldade > threshold
+        if difficulty < difficulty_threshold:
+            continue
+        
+        stats['high_contamination'] += 1
+        
+        # Encontra boxes que contaminam este
+        contaminators = []
+        area_i = (box_i[2] - box_i[0]) * (box_i[3] - box_i[1])
+        
+        for j, box_j in enumerate(boxes):
+            if i == j:
+                continue
+            
+            # Calcula IoU
+            x1_inter = max(box_i[0], box_j[0])
+            y1_inter = max(box_i[1], box_j[1])
+            x2_inter = min(box_i[2], box_j[2])
+            y2_inter = min(box_i[3], box_j[3])
+            
+            inter_w = max(0, x2_inter - x1_inter)
+            inter_h = max(0, y2_inter - y1_inter)
+            inter_area = inter_w * inter_h
+            
+            if inter_area <= 0:
+                continue
+            
+            area_j = (box_j[2] - box_j[0]) * (box_j[3] - box_j[1])
+            iou = inter_area / (area_i + area_j - inter_area)
+            
+            if iou > 0.3 and area_j > area_i:
+                # box_j contamina box_i
+                influence = iou * (area_j / area_i)
+                contaminators.append((j, iou, area_j / area_i, influence))
+        
+        if len(contaminators) == 0:
+            continue
+        
+        # Ordena contaminadores por influência
+        contaminators.sort(key=lambda x: x[3], reverse=True)
+        biggest_contaminator_idx = contaminators[0][0]
+        biggest_contaminator_label = pred_labels[biggest_contaminator_idx]
+        
+        # Se previu a MESMA classe do maior contaminador
+        # → Provavelmente features contaminadas
+        if pred_labels[i] == biggest_contaminator_label:
+            # Pega top-2 predições
+            top2_scores, top2_labels = pred_scores[i].topk(2)
+            
+            # Se segunda opção tem score razoável (>30% da primeira)
+            if len(top2_scores) >= 2 and top2_scores[1] > top2_scores[0] * 0.3:
+                # Troca para segunda opção
+                old_label = pred_labels[i].item()
+                new_label = top2_labels[1].item()
+                
+                refined_labels[i] = top2_labels[1]
+                stats['refinements_applied'] += 1
+                
+                # Log detalhado (opcional, comente se muito verboso)
+                # print(f"[SPATIAL-REFINE] Box {i}: {old_label} → {new_label} "
+                #       f"(difficulty={difficulty:.2f}, contaminado por box {biggest_contaminator_idx})")
+    
+    return refined_labels, stats
+
 # ---------------------------
 # Helper: pairwise_iou_xyxy
 # ---------------------------
@@ -7691,26 +7845,573 @@ class MyHookFilterKNN_Class_Relabel(Hook):
             print(f"[DEBUG] Atualização finalizada para a época {runner.epoch + 1}")
 
 
-# @HOOKS.register_module()
-# class MyHookIter(Hook):
+@HOOKS.register_module()
+class MyHookBoxCurriculumOnly(Hook):
+    """
+    Experimento 1: Apenas Box-Level Curriculum (sem spatial refinement)
+    """
+    
+    def __init__(self, 
+                 reload_dataset=False, 
+                 relabel_conf=0.95, 
+                 double_thr=2, 
+                 filter_conf=0.8, 
+                 filter_warmup=0, 
+                 iou_assigner=0.5, 
+                 low_quality=False, 
+                 filter_thr=0.7, 
+                 numGMM=2, 
+                 filter_type='pred', 
+                 group=False, 
+                 selcand='max',
+                 
+                 # Curriculum parameters
+                 curriculum_epochs=6,
+                 max_difficulty_schedule=None):
+        
+        # Baseline parameters
+        self.reload_dataset = reload_dataset
+        self.relabel_conf = relabel_conf
+        self.double_thr = double_thr
+        self.filter_conf = filter_conf
+        self.filter_warmup = filter_warmup
+        self.iou_assigner = iou_assigner
+        self.low_quality = low_quality
+        self.filter_thr = filter_thr
+        self.numGMM = numGMM
+        self.filter_type = filter_type
+        self.group = group
+        self.selcand = selcand
+        
+        # Curriculum parameters
+        self.curriculum_epochs = curriculum_epochs
+        if max_difficulty_schedule is None:
+            self.max_difficulty_schedule = [0.3, 0.3, 0.3, 0.6, 0.6, 0.6, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        else:
+            self.max_difficulty_schedule = max_difficulty_schedule
+    
+    def before_train_epoch(self, runner, *args, **kwargs):
+        if (runner.epoch + 1) > 0:
+            print(f"[EPOCH]- runner.epoch: {runner.epoch}")
+            dataloader = runner.train_loop.dataloader
+            dataset = dataloader.dataset
+            
+            reload_dataset = self.reload_dataset
+            relabel_conf = self.relabel_conf
+            
+            if reload_dataset:
+                runner.train_loop.dataloader.dataset.dataset.datasets[0]._fully_initialized = False
+                runner.train_loop.dataloader.dataset.dataset.datasets[0].full_init()
+                runner.train_loop.dataloader.dataset.dataset.datasets[1]._fully_initialized = False
+                runner.train_loop.dataloader.dataset.dataset.datasets[1].full_init()
+            
+            while hasattr(dataset, 'dataset'):
+                dataset = dataset.dataset
+            
+            if not hasattr(dataset, 'datasets'):
+                raise ValueError("Esperado um ConcatDataset, mas dataset não tem atributo 'datasets'.")
+            
+            datasets = dataset.datasets
+            
+            assigner = MaxIoUAssigner(
+                pos_iou_thr=self.iou_assigner,
+                neg_iou_thr=self.iou_assigner,
+                min_pos_iou=self.iou_assigner,
+                match_low_quality=self.low_quality
+            )
+            
+            dataset_img_map = {data_info['img_path']: (sub_dataset_idx, data_idx)
+                            for sub_dataset_idx, sub_dataset in enumerate(datasets)
+                            if hasattr(sub_dataset, 'data_list')
+                            for data_idx, data_info in enumerate(sub_dataset.data_list)}
+            
+            allbb_preds_map = defaultdict(dict)
+            all_gt_idx_map = defaultdict(list)
+            
+            num_classes = 20
+            count_gts = 0
+            sanity_count = 0
+            global_index_counter = 0
+            
+            # ===== CURRICULUM STATS =====
+            curriculum_stats = {
+                'total_boxes': 0,
+                'ignored_boxes': 0,
+            }
+            
+            # Determina threshold de dificuldade para esta época
+            epoch = runner.epoch + 1
+            if epoch <= self.curriculum_epochs:
+                max_difficulty = self.max_difficulty_schedule[min(epoch-1, len(self.max_difficulty_schedule)-1)]
+                print(f"[CURRICULUM] Época {epoch}: max_difficulty = {max_difficulty:.2f}")
+            else:
+                max_difficulty = 1.0  # Aceita todos os boxes
+            
+            for batch_idx, data_batch in enumerate(dataloader):
+                with torch.no_grad():
+                    data = runner.model.data_preprocessor(data_batch, True)
+                    inputs = data['inputs']
+                    data_samples = data['data_samples']
+                    predictions_pred = runner.model.my_get_logits(inputs, data_samples, all_logits=True)
+                
+                for i, data_sample in enumerate(data_batch['data_samples']):
+                    img_path = data_sample.img_path
+                    
+                    if img_path not in dataset_img_map:
+                        print(f"[WARNING] Não foi possível localizar a amostra no dataset: {img_path}")
+                        continue
+                    
+                    pred_instances = predictions_pred[i].pred_instances
+                    pred_instances.priors = pred_instances.pop('bboxes')
+                    
+                    gt_instances = data_sample.gt_instances
+                    gt_labels = gt_instances.labels.to(pred_instances.priors.device)
+                    
+                    gt_instances.bboxes = gt_instances.bboxes.to(pred_instances.priors.device)
+                    gt_instances.labels = gt_instances.labels.to(pred_instances.priors.device)
+                    
+                    pred_instances.priors = pred_instances.priors.to(pred_instances.priors.device)
+                    pred_instances.labels = pred_instances.labels.to(pred_instances.priors.device)
+                    pred_instances.scores = pred_instances.scores.to(pred_instances.priors.device)
+                    pred_instances.logits = pred_instances.logits.to(pred_instances.priors.device)
+                    
+                    assign_result = assigner.assign(pred_instances, gt_instances)
+                    updated_labels = gt_labels.clone()
+                    
+                    all_gt_idx_map[img_path] = []
+                    count_gts += assign_result.num_gts
+                    
+                    sub_dataset_idx, dataset_data_idx = dataset_img_map[img_path]
+                    sub_dataset = datasets[sub_dataset_idx]
+                    
+                    # ===== APLICAR CURRICULUM (SE ATIVO) =====
+                    gt_boxes = gt_instances.bboxes.tensor
+                    
+                    if epoch <= self.curriculum_epochs:
+                        for gt_idx in range(len(gt_boxes)):
+                            curriculum_stats['total_boxes'] += 1
+                            
+                            # Calcula dificuldade do box
+                            difficulty = compute_box_difficulty(
+                                gt_boxes[gt_idx], 
+                                gt_boxes, 
+                                box_i_idx=gt_idx
+                            )
+                            
+                            # Se muito difícil, ignora temporariamente
+                            if difficulty > max_difficulty:
+                                sub_dataset.data_list[dataset_data_idx]['instances'][gt_idx]['ignore_flag'] = 1
+                                curriculum_stats['ignored_boxes'] += 1
+                            else:
+                                # Garante que não está ignorado
+                                sub_dataset.data_list[dataset_data_idx]['instances'][gt_idx]['ignore_flag'] = 0
+                    
+                    # ===== PROCESSO DE REANOTAÇÃO (BASELINE) =====
+                    for gt_idx in range(assign_result.num_gts):
+                        # Pula se ignorado pelo curriculum
+                        if sub_dataset.data_list[dataset_data_idx]['instances'][gt_idx].get('ignore_flag', 0) == 1:
+                            continue
+                        
+                        associated_preds = assign_result.gt_inds.eq(gt_idx + 1).nonzero(as_tuple=True)[0]
+                        sanity_count += 1
+                        
+                        if associated_preds.numel() == 0:
+                            continue
+                        
+                        logits_associated = pred_instances.logits[associated_preds]
+                        myscores = torch.softmax(logits_associated, dim=-1)
+                        
+                        myscores_gt = myscores[:, updated_labels[gt_idx].cpu().item()]
+                        max_score_val = myscores.max()
+                        max_score_idx = myscores.argmax()
+                        amostra_id, classe_id = divmod(max_score_idx.item(), myscores.size(1))
+                        score_gt_max_pred = myscores_gt[amostra_id].cpu().item()
+                        
+                        all_gt_idx_map[img_path].append(gt_idx)
+                        
+                        allbb_preds_map[img_path][gt_idx] = {
+                            'pred': score_gt_max_pred,
+                            'gt_label': gt_labels[gt_idx].item(),
+                            'global_index_counter': global_index_counter,
+                            'max_pred': max_score_val.cpu().item(),
+                            'pred_label': classe_id,
+                            'filtered': False
+                        }
+                        global_index_counter += 1
+                        
+                        confident_preds = associated_preds[myscores.max(dim=1).values > relabel_conf]
+                        
+                        if self.group and len(associated_preds) > 1 and (max_score_val > 0.45):
+                            labels_group = myscores.argmax(dim=1)
+                            most_common_label, qtd = Counter(labels_group.tolist()).most_common(1)[0]
+                            scores_most_common = myscores[:, most_common_label]
+                            confident_most_common = associated_preds[scores_most_common > 0.45]
+                            
+                            if qtd > (len(associated_preds) / 2) and len(confident_most_common) > 2:
+                                most_common_label = most_common_label
+                            elif confident_preds.numel() > 0:
+                                pred_labels_confident = pred_instances['logits'][confident_preds].argmax(dim=1)
+                                most_common_label = Counter(pred_labels_confident.tolist()).most_common(1)[0][0]
+                            else:
+                                continue
+                        elif confident_preds.numel() > 0:
+                            pred_labels_confident = pred_instances['logits'][confident_preds].argmax(dim=1)
+                            most_common_label = Counter(pred_labels_confident.tolist()).most_common(1)[0][0]
+                        else:
+                            continue
+                        
+                        updated_labels[gt_idx] = most_common_label
+                        allbb_preds_map[img_path][gt_idx]['gt_label'] = most_common_label
+                        
+                        # Recalcula scores após relabel
+                        myscores_gt = myscores[:, updated_labels[gt_idx].cpu().item()]
+                        max_score_idx = myscores.argmax()
+                        amostra_id, classe_id = divmod(max_score_idx.item(), myscores.size(1))
+                        score_gt_max_pred = myscores_gt[amostra_id].cpu().item()
+                        
+                        allbb_preds_map[img_path][gt_idx]['pred'] = score_gt_max_pred
+                        allbb_preds_map[img_path][gt_idx]['filtered'] = True
+                    
+                    # Atualiza labels no dataset
+                    valid_instance_indices = [idx for idx, inst in enumerate(sub_dataset.data_list[dataset_data_idx]['instances']) if inst['ignore_flag'] == 0]
+                    for gt_idx, valid_idx in enumerate(valid_instance_indices):
+                        if gt_idx < len(updated_labels):
+                            sub_dataset.data_list[dataset_data_idx]['instances'][valid_idx]['bbox_label'] = updated_labels[gt_idx].item()
+            
+            # ===== LOG CURRICULUM STATS =====
+            if curriculum_stats['total_boxes'] > 0:
+                pct_ignored = 100 * curriculum_stats['ignored_boxes'] / curriculum_stats['total_boxes']
+                print(f"[CURRICULUM] Época {epoch}:")
+                print(f"  - Boxes totais: {curriculum_stats['total_boxes']}")
+                print(f"  - Boxes ignorados: {curriculum_stats['ignored_boxes']} ({pct_ignored:.1f}%)")
+                print(f"  - Difficulty threshold: {max_difficulty:.2f}")
+            
+            # ===== GMM FILTERING (BASELINE - SEM MUDANÇAS) =====
+            if (runner.epoch + 1) >= self.filter_warmup:
+                all_classes_low_confidence_scores_global_idx = []
+                
+                for c in range(num_classes):
+                    scores = np.array([])
+                    scores_dict = {'pred': np.array([])}
+                    c_global_indexes = np.array([])
+                    
+                    for img_path, img_info in allbb_preds_map.items():
+                        for temp_gt_idx, values in img_info.items():
+                            if values['gt_label'] == c:
+                                scores_dict['pred'] = np.append(scores_dict['pred'], values['pred'])
+                                scores = np.append(scores, values['pred'])
+                                c_global_indexes = np.append(c_global_indexes, values['global_index_counter'])
+                    
+                    if len(scores) == 0:
+                        continue
+                    
+                    c_class_scores = scores.reshape(-1, 1)
+                    
+                    gmm = GaussianMixture(n_components=self.numGMM, max_iter=10, tol=1e-2, reg_covar=5e-4, random_state=42)
+                    gmm.fit(c_class_scores)
+                    
+                    low_confidence_component = np.argmin(gmm.means_)
+                    low_confidence_scores = gmm.predict_proba(c_class_scores)[:, low_confidence_component]
+                    threshold = self.filter_conf
+                    
+                    low_confidence_indices = np.where(low_confidence_scores > threshold)[0]
+                    all_classes_low_confidence_scores_global_idx.extend(c_global_indexes[low_confidence_indices])
+                
+                for img_path, gt_scores in allbb_preds_map.items():
+                    sub_dataset_idx, dataset_data_idx = dataset_img_map[img_path]
+                    sub_dataset = datasets[sub_dataset_idx]
+                    
+                    valid_instance_indices = [idx for idx, inst in enumerate(sub_dataset.data_list[dataset_data_idx]['instances']) if inst['ignore_flag'] == 0]
+                    gt_idx_list = all_gt_idx_map[img_path]
+                    
+                    for gt_idx in gt_idx_list:
+                        related_global_index = allbb_preds_map[img_path][gt_idx]['global_index_counter']
+                        
+                        if (related_global_index in all_classes_low_confidence_scores_global_idx) and (allbb_preds_map[img_path][gt_idx]['pred'] < self.filter_thr):
+                            valid_idx = valid_instance_indices[gt_idx]
+                            
+                            if allbb_preds_map[img_path][gt_idx]['max_pred'] >= self.double_thr:
+                                sub_dataset.data_list[dataset_data_idx]['instances'][valid_idx]['bbox_label'] = allbb_preds_map[img_path][gt_idx]['pred_label']
+                            else:
+                                sub_dataset.data_list[dataset_data_idx]['instances'][valid_idx]['ignore_flag'] = 1
+            
+            print(f"[DEBUG] Atualização finalizada para a época {runner.epoch + 1}")
 
-#     def before_train_iter(self, runner, batch_idx, data_batch):
-#         # import pdb; pdb.set_trace()
-#         #data_batch['data_samples'][0].gt_instances
-#         #runner.train_dataloader.dataset.fully_initialized=False
-#         #runner.train_dataloader.dataset.dataset._fully_initialized=False
-#         #runner.train_dataloader.dataset.dataset.full_init()
 
-
-# @HOOKS.register_module()
-# class MyHookAfterEp(Hook):
-
-#     def after_train_epoch(self, runner, batch_idx, data_batch, outputs):
-#         # import pdb; pdb.set_trace()
-        # (If you find: valid_instance_indices[gt_idx], replace with:
-        # inst_all = sub_dataset.data_list[dataset_data_idx]['instances']
-        # if gt_idx >= len(inst_all):
-        #     print(f"[MAP][WARN] gt_idx={gt_idx} out of range for instances (len={len(inst_all)}) img={os.path.basename(img_path)}")
-        #     continue
-        # valid_idx = gt_idx
-        # )
+@HOOKS.register_module()
+class MyHookSpatialRefinementOnly(Hook):
+    """
+    Experimento 2: Apenas Spatial Refinement (sem curriculum)
+    """
+    
+    def __init__(self, 
+                 reload_dataset=False, 
+                 relabel_conf=0.95, 
+                 double_thr=2, 
+                 filter_conf=0.8, 
+                 filter_warmup=0, 
+                 iou_assigner=0.5, 
+                 low_quality=False, 
+                 filter_thr=0.7, 
+                 numGMM=2, 
+                 filter_type='pred', 
+                 group=False, 
+                 selcand='max',
+                 
+                 # Spatial refinement parameters
+                 spatial_refinement_threshold=0.5):
+        
+        # Baseline parameters
+        self.reload_dataset = reload_dataset
+        self.relabel_conf = relabel_conf
+        self.double_thr = double_thr
+        self.filter_conf = filter_conf
+        self.filter_warmup = filter_warmup
+        self.iou_assigner = iou_assigner
+        self.low_quality = low_quality
+        self.filter_thr = filter_thr
+        self.numGMM = numGMM
+        self.filter_type = filter_type
+        self.group = group
+        self.selcand = selcand
+        
+        # Spatial refinement parameters
+        self.spatial_refinement_threshold = spatial_refinement_threshold
+    
+    def before_train_epoch(self, runner, *args, **kwargs):
+        if (runner.epoch + 1) > 0:
+            print(f"[EPOCH]- runner.epoch: {runner.epoch}")
+            dataloader = runner.train_loop.dataloader
+            dataset = dataloader.dataset
+            
+            reload_dataset = self.reload_dataset
+            relabel_conf = self.relabel_conf
+            
+            if reload_dataset:
+                runner.train_loop.dataloader.dataset.dataset.datasets[0]._fully_initialized = False
+                runner.train_loop.dataloader.dataset.dataset.datasets[0].full_init()
+                runner.train_loop.dataloader.dataset.dataset.datasets[1]._fully_initialized = False
+                runner.train_loop.dataloader.dataset.dataset.datasets[1].full_init()
+            
+            while hasattr(dataset, 'dataset'):
+                dataset = dataset.dataset
+            
+            if not hasattr(dataset, 'datasets'):
+                raise ValueError("Esperado um ConcatDataset, mas dataset não tem atributo 'datasets'.")
+            
+            datasets = dataset.datasets
+            
+            assigner = MaxIoUAssigner(
+                pos_iou_thr=self.iou_assigner,
+                neg_iou_thr=self.iou_assigner,
+                min_pos_iou=self.iou_assigner,
+                match_low_quality=self.low_quality
+            )
+            
+            dataset_img_map = {data_info['img_path']: (sub_dataset_idx, data_idx)
+                            for sub_dataset_idx, sub_dataset in enumerate(datasets)
+                            if hasattr(sub_dataset, 'data_list')
+                            for data_idx, data_info in enumerate(sub_dataset.data_list)}
+            
+            allbb_preds_map = defaultdict(dict)
+            all_gt_idx_map = defaultdict(list)
+            
+            num_classes = 20
+            count_gts = 0
+            sanity_count = 0
+            global_index_counter = 0
+            
+            # ===== SPATIAL REFINEMENT STATS =====
+            spatial_stats = {
+                'total_boxes': 0,
+                'high_contamination': 0,
+                'refinements_applied': 0,
+            }
+            
+            for batch_idx, data_batch in enumerate(dataloader):
+                with torch.no_grad():
+                    data = runner.model.data_preprocessor(data_batch, True)
+                    inputs = data['inputs']
+                    data_samples = data['data_samples']
+                    predictions_pred = runner.model.my_get_logits(inputs, data_samples, all_logits=True)
+                
+                for i, data_sample in enumerate(data_batch['data_samples']):
+                    img_path = data_sample.img_path
+                    
+                    if img_path not in dataset_img_map:
+                        print(f"[WARNING] Não foi possível localizar a amostra no dataset: {img_path}")
+                        continue
+                    
+                    pred_instances = predictions_pred[i].pred_instances
+                    pred_instances.priors = pred_instances.pop('bboxes')
+                    
+                    gt_instances = data_sample.gt_instances
+                    gt_labels = gt_instances.labels.to(pred_instances.priors.device)
+                    
+                    gt_instances.bboxes = gt_instances.bboxes.to(pred_instances.priors.device)
+                    gt_instances.labels = gt_instances.labels.to(pred_instances.priors.device)
+                    
+                    pred_instances.priors = pred_instances.priors.to(pred_instances.priors.device)
+                    pred_instances.labels = pred_instances.labels.to(pred_instances.priors.device)
+                    pred_instances.scores = pred_instances.scores.to(pred_instances.priors.device)
+                    pred_instances.logits = pred_instances.logits.to(pred_instances.priors.device)
+                    
+                    assign_result = assigner.assign(pred_instances, gt_instances)
+                    updated_labels = gt_labels.clone()
+                    
+                    all_gt_idx_map[img_path] = []
+                    count_gts += assign_result.num_gts
+                    
+                    sub_dataset_idx, dataset_data_idx = dataset_img_map[img_path]
+                    sub_dataset = datasets[sub_dataset_idx]
+                    
+                    # ===== PROCESSO DE REANOTAÇÃO COM SPATIAL REFINEMENT =====
+                    for gt_idx in range(assign_result.num_gts):
+                        associated_preds = assign_result.gt_inds.eq(gt_idx + 1).nonzero(as_tuple=True)[0]
+                        sanity_count += 1
+                        
+                        if associated_preds.numel() == 0:
+                            continue
+                        
+                        logits_associated = pred_instances.logits[associated_preds]
+                        myscores = torch.softmax(logits_associated, dim=-1)
+                        
+                        # ===== APLICAR SPATIAL REFINEMENT =====
+                        boxes_associated = pred_instances.priors[associated_preds]
+                        labels_associated = pred_instances.labels[associated_preds]
+                        
+                        refined_labels, refine_stats = spatial_aware_relabeling(
+                            boxes_associated,
+                            labels_associated,
+                            myscores,
+                            difficulty_threshold=self.spatial_refinement_threshold
+                        )
+                        
+                        # Acumula stats
+                        spatial_stats['total_boxes'] += refine_stats['total_boxes']
+                        spatial_stats['high_contamination'] += refine_stats['high_contamination']
+                        spatial_stats['refinements_applied'] += refine_stats['refinements_applied']
+                        
+                        # ===== Continua processo de relabeling usando REFINED LABELS =====
+                        myscores_gt = myscores[:, updated_labels[gt_idx].cpu().item()]
+                        max_score_val = myscores.max()
+                        max_score_idx = myscores.argmax()
+                        amostra_id, classe_id = divmod(max_score_idx.item(), myscores.size(1))
+                        score_gt_max_pred = myscores_gt[amostra_id].cpu().item()
+                        
+                        all_gt_idx_map[img_path].append(gt_idx)
+                        
+                        allbb_preds_map[img_path][gt_idx] = {
+                            'pred': score_gt_max_pred,
+                            'gt_label': gt_labels[gt_idx].item(),
+                            'global_index_counter': global_index_counter,
+                            'max_pred': max_score_val.cpu().item(),
+                            'pred_label': classe_id,
+                            'filtered': False
+                        }
+                        global_index_counter += 1
+                        
+                        confident_preds = associated_preds[myscores.max(dim=1).values > relabel_conf]
+                        
+                        if self.group and len(associated_preds) > 1 and (max_score_val > 0.45):
+                            labels_group = myscores.argmax(dim=1)
+                            most_common_label, qtd = Counter(labels_group.tolist()).most_common(1)[0]
+                            scores_most_common = myscores[:, most_common_label]
+                            confident_most_common = associated_preds[scores_most_common > 0.45]
+                            
+                            if qtd > (len(associated_preds) / 2) and len(confident_most_common) > 2:
+                                most_common_label = most_common_label
+                            elif confident_preds.numel() > 0:
+                                # USA REFINED LABELS aqui
+                                pred_labels_confident = refined_labels[confident_preds]
+                                most_common_label = Counter(pred_labels_confident.tolist()).most_common(1)[0][0]
+                            else:
+                                continue
+                        elif confident_preds.numel() > 0:
+                            # USA REFINED LABELS aqui
+                            pred_labels_confident = refined_labels[confident_preds]
+                            most_common_label = Counter(pred_labels_confident.tolist()).most_common(1)[0][0]
+                        else:
+                            continue
+                        
+                        updated_labels[gt_idx] = most_common_label
+                        allbb_preds_map[img_path][gt_idx]['gt_label'] = most_common_label
+                        
+                        # Recalcula scores após relabel
+                        myscores_gt = myscores[:, updated_labels[gt_idx].cpu().item()]
+                        max_score_idx = myscores.argmax()
+                        amostra_id, classe_id = divmod(max_score_idx.item(), myscores.size(1))
+                        score_gt_max_pred = myscores_gt[amostra_id].cpu().item()
+                        
+                        allbb_preds_map[img_path][gt_idx]['pred'] = score_gt_max_pred
+                        allbb_preds_map[img_path][gt_idx]['filtered'] = True
+                    
+                    # Atualiza labels no dataset
+                    valid_instance_indices = [idx for idx, inst in enumerate(sub_dataset.data_list[dataset_data_idx]['instances']) if inst['ignore_flag'] == 0]
+                    for gt_idx, valid_idx in enumerate(valid_instance_indices):
+                        if gt_idx < len(updated_labels):
+                            sub_dataset.data_list[dataset_data_idx]['instances'][valid_idx]['bbox_label'] = updated_labels[gt_idx].item()
+            
+            # ===== LOG SPATIAL REFINEMENT STATS =====
+            if spatial_stats['total_boxes'] > 0:
+                pct_contaminated = 100 * spatial_stats['high_contamination'] / spatial_stats['total_boxes']
+                if spatial_stats['high_contamination'] > 0:
+                    pct_refined = 100 * spatial_stats['refinements_applied'] / spatial_stats['high_contamination']
+                else:
+                    pct_refined = 0.0
+                
+                print(f"[SPATIAL-REFINE] Época {runner.epoch + 1}:")
+                print(f"  - Boxes totais: {spatial_stats['total_boxes']}")
+                print(f"  - Boxes com alta contaminação: {spatial_stats['high_contamination']} ({pct_contaminated:.1f}%)")
+                print(f"  - Refinamentos aplicados: {spatial_stats['refinements_applied']} ({pct_refined:.1f}% dos contaminados)")
+            
+            # ===== GMM FILTERING (BASELINE - SEM MUDANÇAS) =====
+            if (runner.epoch + 1) >= self.filter_warmup:
+                all_classes_low_confidence_scores_global_idx = []
+                
+                for c in range(num_classes):
+                    scores = np.array([])
+                    scores_dict = {'pred': np.array([])}
+                    c_global_indexes = np.array([])
+                    
+                    for img_path, img_info in allbb_preds_map.items():
+                        for temp_gt_idx, values in img_info.items():
+                            if values['gt_label'] == c:
+                                scores_dict['pred'] = np.append(scores_dict['pred'], values['pred'])
+                                scores = np.append(scores, values['pred'])
+                                c_global_indexes = np.append(c_global_indexes, values['global_index_counter'])
+                    
+                    if len(scores) == 0:
+                        continue
+                    
+                    c_class_scores = scores.reshape(-1, 1)
+                    
+                    gmm = GaussianMixture(n_components=self.numGMM, max_iter=10, tol=1e-2, reg_covar=5e-4, random_state=42)
+                    gmm.fit(c_class_scores)
+                    
+                    low_confidence_component = np.argmin(gmm.means_)
+                    low_confidence_scores = gmm.predict_proba(c_class_scores)[:, low_confidence_component]
+                    threshold = self.filter_conf
+                    
+                    low_confidence_indices = np.where(low_confidence_scores > threshold)[0]
+                    all_classes_low_confidence_scores_global_idx.extend(c_global_indexes[low_confidence_indices])
+                
+                for img_path, gt_scores in allbb_preds_map.items():
+                    sub_dataset_idx, dataset_data_idx = dataset_img_map[img_path]
+                    sub_dataset = datasets[sub_dataset_idx]
+                    
+                    valid_instance_indices = [idx for idx, inst in enumerate(sub_dataset.data_list[dataset_data_idx]['instances']) if inst['ignore_flag'] == 0]
+                    gt_idx_list = all_gt_idx_map[img_path]
+                    
+                    for gt_idx in gt_idx_list:
+                        related_global_index = allbb_preds_map[img_path][gt_idx]['global_index_counter']
+                        
+                        if (related_global_index in all_classes_low_confidence_scores_global_idx) and (allbb_preds_map[img_path][gt_idx]['pred'] < self.filter_thr):
+                            valid_idx = valid_instance_indices[gt_idx]
+                            
+                            if allbb_preds_map[img_path][gt_idx]['max_pred'] >= self.double_thr:
+                                sub_dataset.data_list[dataset_data_idx]['instances'][valid_idx]['bbox_label'] = allbb_preds_map[img_path][gt_idx]['pred_label']
+                            else:
+                                sub_dataset.data_list[dataset_data_idx]['instances'][valid_idx]['ignore_flag'] = 1
+            
+            print(f"[DEBUG] Atualização finalizada para a época {runner.epoch + 1}")
