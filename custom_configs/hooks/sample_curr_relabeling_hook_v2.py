@@ -8128,7 +8128,8 @@ class MyHookBoxCurriculumOnly(Hook):
                         related_global_index = allbb_preds_map[img_path][gt_idx]['global_index_counter']
                         
                         if (related_global_index in all_classes_low_confidence_scores_global_idx) and (allbb_preds_map[img_path][gt_idx]['pred'] < self.filter_thr):
-                            valid_idx = valid_instance_indices[gt_idx]
+                            # valid_idx = valid_instance_indices[gt_idx]
+                            valid_idx = gt_idx
                             
                             if allbb_preds_map[img_path][gt_idx]['max_pred'] >= self.double_thr:
                                 sub_dataset.data_list[dataset_data_idx]['instances'][valid_idx]['bbox_label'] = allbb_preds_map[img_path][gt_idx]['pred_label']
@@ -8311,7 +8312,9 @@ class MyHookSpatialRefinementOnly(Hook):
                         }
                         global_index_counter += 1
                         
-                        confident_preds = associated_preds[myscores.max(dim=1).values > relabel_conf]
+                        confident_mask = myscores.max(dim=1).values > relabel_conf
+                        confident_preds = associated_preds[confident_mask]
+                        # confident_preds = associated_preds[myscores.max(dim=1).values > relabel_conf]
                         
                         if self.group and len(associated_preds) > 1 and (max_score_val > 0.45):
                             labels_group = myscores.argmax(dim=1)
@@ -8323,13 +8326,15 @@ class MyHookSpatialRefinementOnly(Hook):
                                 most_common_label = most_common_label
                             elif confident_preds.numel() > 0:
                                 # USA REFINED LABELS aqui
-                                pred_labels_confident = refined_labels[confident_preds]
+                                # pred_labels_confident = refined_labels[confident_preds]
+                                pred_labels_confident = refined_labels[confident_mask]
                                 most_common_label = Counter(pred_labels_confident.tolist()).most_common(1)[0][0]
                             else:
                                 continue
                         elif confident_preds.numel() > 0:
                             # USA REFINED LABELS aqui
-                            pred_labels_confident = refined_labels[confident_preds]
+                            # pred_labels_confident = refined_labels[confident_preds]
+                            pred_labels_confident = refined_labels[confident_mask]
                             most_common_label = Counter(pred_labels_confident.tolist()).most_common(1)[0][0]
                         else:
                             continue
@@ -8407,7 +8412,8 @@ class MyHookSpatialRefinementOnly(Hook):
                         related_global_index = allbb_preds_map[img_path][gt_idx]['global_index_counter']
                         
                         if (related_global_index in all_classes_low_confidence_scores_global_idx) and (allbb_preds_map[img_path][gt_idx]['pred'] < self.filter_thr):
-                            valid_idx = valid_instance_indices[gt_idx]
+                            # valid_idx = valid_instance_indices[gt_idx]
+                            valid_idx = gt_idx
                             
                             if allbb_preds_map[img_path][gt_idx]['max_pred'] >= self.double_thr:
                                 sub_dataset.data_list[dataset_data_idx]['instances'][valid_idx]['bbox_label'] = allbb_preds_map[img_path][gt_idx]['pred_label']
