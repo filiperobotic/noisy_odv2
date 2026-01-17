@@ -8318,7 +8318,7 @@ class MyHookSpatialRefinementOnly(Hook):
                         
                         if self.group and len(associated_preds) > 1 and (max_score_val > 0.45):
                             labels_group = myscores.argmax(dim=1)
-                            most_common_label, qtd = Counter(labels_group.tolist()).most_common(1)[0]
+                            most_common_label, qtd = Counter(labels_group.cpu().tolist()).most_common(1)[0]
                             scores_most_common = myscores[:, most_common_label]
                             confident_most_common = associated_preds[scores_most_common > 0.45]
                             
@@ -8328,14 +8328,14 @@ class MyHookSpatialRefinementOnly(Hook):
                                 # USA REFINED LABELS aqui
                                 # pred_labels_confident = refined_labels[confident_preds]
                                 pred_labels_confident = refined_labels[confident_mask]
-                                most_common_label = Counter(pred_labels_confident.tolist()).most_common(1)[0][0]
+                                most_common_label = Counter(pred_labels_confident.cpu().tolist()).most_common(1)[0][0]
                             else:
                                 continue
                         elif confident_preds.numel() > 0:
                             # USA REFINED LABELS aqui
                             # pred_labels_confident = refined_labels[confident_preds]
                             pred_labels_confident = refined_labels[confident_mask]
-                            most_common_label = Counter(pred_labels_confident.tolist()).most_common(1)[0][0]
+                            most_common_label = Counter(pred_labels_confident.cpu().tolist()).most_common(1)[0][0]
                         else:
                             continue
                         
