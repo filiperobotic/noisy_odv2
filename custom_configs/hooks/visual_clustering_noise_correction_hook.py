@@ -286,9 +286,21 @@ class VisualClusteringNoiseCorrectionHook(Hook):
                 pred_instances = predictions[i].pred_instances
                 pred_instances.priors = pred_instances.pop('bboxes')
                 
+                # Determinar o device das predições
+                device = pred_instances.priors.device
+                
                 gt_instances = data_sample.gt_instances
-                gt_labels = gt_instances.labels.to(pred_instances.priors.device)
-                gt_bboxes = gt_instances.bboxes.to(pred_instances.priors.device)
+                
+                # Garantir que TODOS os tensores estejam no mesmo device
+                gt_instances.bboxes = gt_instances.bboxes.to(device)
+                gt_instances.labels = gt_instances.labels.to(device)
+                pred_instances.priors = pred_instances.priors.to(device)
+                pred_instances.labels = pred_instances.labels.to(device)
+                pred_instances.scores = pred_instances.scores.to(device)
+                pred_instances.logits = pred_instances.logits.to(device)
+                
+                gt_labels = gt_instances.labels
+                gt_bboxes = gt_instances.bboxes
                 
                 # Associar predições com GTs
                 assign_result = assigner.assign(pred_instances, gt_instances)
