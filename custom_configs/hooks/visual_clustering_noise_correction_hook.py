@@ -435,9 +435,13 @@ class VisualClusteringNoiseCorrectionHook(Hook):
             anchor_mean = anchor_embeddings.mean(axis=0)
             anchor_mean_norm = anchor_mean / (np.linalg.norm(anchor_mean) + 1e-8)
             
+            # Criar set de IDs das âncoras para comparação rápida
+            anchor_ids = set(id(a) for a in anchors)
+            
             # Propagar label para suspeitos
             for box in cluster_boxes:
-                if box in anchors:
+                # Verificar se este box é uma âncora (usando id do objeto)
+                if id(box) in anchor_ids:
                     continue
                 
                 # Verificar se é suspeito
