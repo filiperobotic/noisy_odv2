@@ -7,7 +7,8 @@ Para usar, adicione este hook na configuração do seu experimento MMDetection.
 _base_ = [
     # '../_base_/models/faster-rcnn_r50_fpn.py',
     '../_base_/models/faster-rcnn_r50_fpn_20c.py',
-    '../_base_/datasets/voc0712_corrigido_v2_rep3.py',
+    #   '../_base_/datasets/voc0712_corrigido_debug.py',
+    '../_base_/datasets/voc0712_corrigido_v2_rep1.py',
     '../_base_/default_runtime.py'
 ]
 
@@ -90,7 +91,6 @@ optim_wrapper = dict(
 #       or not by default.
 #   - `base_batch_size` = (8 GPUs) x (2 samples per GPU).
 auto_scale_lr = dict(enable=False, base_batch_size=16)
-
 
 
 
