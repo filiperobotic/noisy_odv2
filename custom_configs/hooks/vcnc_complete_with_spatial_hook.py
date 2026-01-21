@@ -476,7 +476,11 @@ class VCNCCompleteWithSpatialHook(Hook):
                     best_logits = logits_associated[best_pred_idx]
                     
                     gt_label = gt_labels[gt_idx].item()
-                    gt_bbox = gt_bboxes[gt_idx]
+                    # gt_bboxes pode ser HorizontalBoxes, então extraímos o tensor
+                    if hasattr(gt_bboxes, 'tensor'):
+                        gt_bbox = gt_bboxes.tensor[gt_idx]
+                    else:
+                        gt_bbox = gt_bboxes[gt_idx]
                     
                     score_gt = best_scores[gt_label].item()
                     pred_label = best_scores.argmax().item()
