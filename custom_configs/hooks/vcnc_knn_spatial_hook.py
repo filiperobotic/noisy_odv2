@@ -1,19 +1,18 @@
 """
-Visual Clustering Noise Correction Hook - V3 COM FILTRAGEM SELETIVA REFINADA
+Visual Clustering Noise Correction Hook - VERSÃO KNN COM SPATIAL REFINEMENT
+
+Diferença principal em relação à versão K-Means:
+- Em vez de criar clusters globais, usa KNN para encontrar os K vizinhos 
+  mais próximos de cada box suspeito
+- Decisão de relabeling é baseada na votação dos vizinhos âncoras
+- Mais local e flexível que K-Means
 
 Combina:
 1. Relabel por confiança > 0.9 (baseline)
-2. Relabel por clustering visual (VCNC)
+2. Relabel por KNN visual (VCNC-KNN)
 3. Spatial Refinement para boxes contaminados espacialmente
-4. **NOVO** Filtragem seletiva refinada (suspeito + não corrigido + não confiante)
+4. Filtragem seletiva refinada (opcional)
 5. Filtragem GMM com ignore_flag (baseline) - opcional
-
-ORDEM DE EXECUÇÃO:
-1. Relabel por confiança alta
-2. Relabel por clustering visual
-3. Spatial Refinement (corrige boxes contaminados por vizinhos maiores)
-4. Filtragem seletiva refinada (remove apenas boxes que passam em 3 critérios)
-5. Filtragem GMM (opcional)
 """
 
 from mmengine.hooks import Hook
@@ -26,14 +25,14 @@ import numpy as np
 from sklearn.mixture import GaussianMixture
 import os
 
-# FAISS para clustering eficiente
+# FAISS para busca eficiente de vizinhos
 try:
     import faiss
     FAISS_AVAILABLE = True
 except ImportError:
     FAISS_AVAILABLE = False
-    print("[WARNING] FAISS não disponível. Usando sklearn KMeans como fallback.")
-    from sklearn.cluster import KMeans
+    print("[WARNING] FAISS não disponível. Usando sklearn NearestNeighbors como fallback.")
+    from sklearn.neighbors import NearestNeighbors
 
 
 # ============================================================
@@ -148,16 +147,18 @@ def spatial_aware_relabeling(boxes, pred_labels, pred_scores, difficulty_thresho
 
 
 @HOOKS.register_module()
-class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
+class VCNCKNNSpatialHook(Hook):
     """
-    VCNC Progressivo + Spatial Refinement + Filtragem Seletiva Refinada
+    VCNC com KNN + Spatial Refinement
     
-    A filtragem seletiva só remove boxes que atendem a TODOS os critérios:
-    1. p_noise >= threshold (suspeito pelo GMM)
-    2. Não foi corrigido por nenhum método (confidence, clustering, spatial)
-    3. Modelo não está confiante (pred_score < confidence_threshold)
+    Diferença do K-Means:
+    - K-Means: agrupa todos os boxes em clusters, depois vota dentro de cada cluster
+    - KNN: para cada box suspeito, encontra os K vizinhos mais próximos e vota
     
-    Isso evita remover amostras difíceis mas corretas.
+    Vantagens do KNN:
+    - Decisões mais locais (não depende de estrutura global de clusters)
+    - Mais flexível com distribuições não-esféricas
+    - Pode ponderar vizinhos pela distância
     """
     
     def __init__(self,
@@ -169,12 +170,17 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
                  enable_confidence_relabel: bool = True,
                  relabel_confidence_threshold: float = 0.9,
                  
-                 # === ETAPA 2: Clustering Visual (VCNC) ===
-                 enable_clustering_relabel: bool = True,
-                 n_clusters: int = 150,
+                 # === ETAPA 2: KNN Visual (VCNC-KNN) ===
+                 enable_knn_relabel: bool = True,
                  use_softmax_as_embedding: bool = True,
                  
-                 # Critérios progressivos
+                 # Parâmetros do KNN
+                 knn_k: int = 15,                    # Número de vizinhos a considerar
+                 knn_min_anchors: int = 5,           # Mínimo de âncoras entre os vizinhos
+                 knn_consensus_threshold: float = 0.6,  # Fração mínima de âncoras concordando
+                 knn_distance_weighted: bool = True,    # Ponderar voto pela distância
+                 
+                 # Critérios progressivos para definir âncoras/suspeitos
                  progressive_epochs: int = 4,
                  
                  # Conservador (épocas iniciais)
@@ -182,25 +188,21 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
                  early_anchor_pred_agreement: float = 0.85,
                  early_anchor_confidence: float = 0.9,
                  early_suspect_gmm_threshold: float = 0.8,
-                 early_similarity_threshold: float = 0.7,
-                 early_cluster_consensus: float = 0.85,
                  
                  # Agressivo (épocas posteriores)
                  anchor_gmm_threshold: float = 0.4,
                  anchor_pred_agreement: float = 0.6,
                  anchor_confidence: float = 0.7,
                  suspect_gmm_threshold: float = 0.5,
-                 similarity_threshold: float = 0.4,
-                 cluster_consensus: float = 0.6,
                  
                  # === ETAPA 3: Spatial Refinement ===
                  enable_spatial_refinement: bool = True,
                  spatial_difficulty_threshold: float = 0.5,
                  
-                 # === ETAPA 4: Filtragem Seletiva Refinada (NOVO) ===
-                 enable_selective_filtering: bool = True,
+                 # === ETAPA 4: Filtragem Seletiva (opcional) ===
+                 enable_selective_filtering: bool = False,
                  selective_filter_gmm_threshold: float = 0.5,
-                 selective_filter_confidence_threshold: float = 0.7,  # NOVO
+                 selective_filter_confidence_threshold: float = 0.7,
                  
                  # === ETAPA 5: Filtragem GMM (Baseline) ===
                  enable_gmm_filter: bool = False,
@@ -223,10 +225,14 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
         self.enable_confidence_relabel = enable_confidence_relabel
         self.relabel_confidence_threshold = relabel_confidence_threshold
         
-        # Etapa 2
-        self.enable_clustering_relabel = enable_clustering_relabel
-        self.n_clusters = n_clusters
+        # Etapa 2 - KNN
+        self.enable_knn_relabel = enable_knn_relabel
         self.use_softmax_as_embedding = use_softmax_as_embedding
+        self.knn_k = knn_k
+        self.knn_min_anchors = knn_min_anchors
+        self.knn_consensus_threshold = knn_consensus_threshold
+        self.knn_distance_weighted = knn_distance_weighted
+        
         self.progressive_epochs = progressive_epochs
         
         # Conservador
@@ -234,22 +240,18 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
         self.early_anchor_pred_agreement = early_anchor_pred_agreement
         self.early_anchor_confidence = early_anchor_confidence
         self.early_suspect_gmm_threshold = early_suspect_gmm_threshold
-        self.early_similarity_threshold = early_similarity_threshold
-        self.early_cluster_consensus = early_cluster_consensus
         
         # Agressivo
         self.anchor_gmm_threshold = anchor_gmm_threshold
         self.anchor_pred_agreement = anchor_pred_agreement
         self.anchor_confidence = anchor_confidence
         self.suspect_gmm_threshold = suspect_gmm_threshold
-        self.similarity_threshold = similarity_threshold
-        self.cluster_consensus = cluster_consensus
         
         # Etapa 3
         self.enable_spatial_refinement = enable_spatial_refinement
         self.spatial_difficulty_threshold = spatial_difficulty_threshold
         
-        # Etapa 4 - Filtragem Seletiva Refinada
+        # Etapa 4
         self.enable_selective_filtering = enable_selective_filtering
         self.selective_filter_gmm_threshold = selective_filter_gmm_threshold
         self.selective_filter_confidence_threshold = selective_filter_confidence_threshold
@@ -276,8 +278,6 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
                 'anchor_pred_agreement': self.early_anchor_pred_agreement,
                 'anchor_confidence': self.early_anchor_confidence,
                 'suspect_gmm_threshold': self.early_suspect_gmm_threshold,
-                'similarity_threshold': self.early_similarity_threshold,
-                'cluster_consensus': self.early_cluster_consensus,
                 'phase': 'CONSERVADOR'
             }
         else:
@@ -286,8 +286,6 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
                 'anchor_pred_agreement': self.anchor_pred_agreement,
                 'anchor_confidence': self.anchor_confidence,
                 'suspect_gmm_threshold': self.suspect_gmm_threshold,
-                'similarity_threshold': self.similarity_threshold,
-                'cluster_consensus': self.cluster_consensus,
                 'phase': 'AGRESSIVO'
             }
     
@@ -320,7 +318,7 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
                 
             except Exception as e:
                 if self.debug:
-                    print(f"[VCNC-V3] Erro GMM classe {cls_id}: {e}")
+                    print(f"[VCNC-KNN] Erro GMM classe {cls_id}: {e}")
         
         return gmm_dict
     
@@ -338,27 +336,108 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
         except:
             return 0.5
     
-    def _cluster_embeddings(self, embeddings, n_clusters):
-        """Agrupa embeddings usando FAISS ou KMeans."""
+    def _build_knn_index(self, embeddings):
+        """
+        Constrói índice para busca de vizinhos mais próximos.
+        Usa FAISS se disponível, senão sklearn.
+        """
         N, D = embeddings.shape
-        n_clusters = min(n_clusters, N // 2)
         
-        if n_clusters < 2:
-            return np.zeros(N, dtype=np.int32)
-        
+        # Normalizar embeddings para usar similaridade de cosseno
         embeddings_norm = embeddings / (np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-8)
         embeddings_norm = embeddings_norm.astype(np.float32)
         
         if FAISS_AVAILABLE:
-            kmeans = faiss.Kmeans(D, n_clusters, niter=20, verbose=False)
-            kmeans.train(embeddings_norm)
-            _, cluster_ids = kmeans.index.search(embeddings_norm, 1)
-            cluster_ids = cluster_ids.flatten()
+            # Usar produto interno (equivalente a cosseno com vetores normalizados)
+            index = faiss.IndexFlatIP(D)
+            index.add(embeddings_norm)
+            return index, embeddings_norm
         else:
-            kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-            cluster_ids = kmeans.fit_predict(embeddings_norm)
+            # Fallback para sklearn
+            nn = NearestNeighbors(n_neighbors=self.knn_k + 1, metric='cosine')
+            nn.fit(embeddings_norm)
+            return nn, embeddings_norm
+    
+    def _find_knn(self, index, embeddings_norm, query_idx, k):
+        """
+        Encontra os K vizinhos mais próximos de um ponto.
+        Retorna índices e similaridades (distâncias convertidas).
+        """
+        query = embeddings_norm[query_idx:query_idx+1]
         
-        return cluster_ids
+        if FAISS_AVAILABLE:
+            # FAISS retorna similaridades (produto interno)
+            similarities, indices = index.search(query, k + 1)
+            similarities = similarities[0]
+            indices = indices[0]
+            
+            # Remover o próprio ponto (sempre é o mais similar a si mesmo)
+            mask = indices != query_idx
+            indices = indices[mask][:k]
+            similarities = similarities[mask][:k]
+            
+        else:
+            # sklearn retorna distâncias de cosseno
+            distances, indices = index.kneighbors(query, n_neighbors=k + 1)
+            distances = distances[0]
+            indices = indices[0]
+            
+            # Remover o próprio ponto
+            mask = indices != query_idx
+            indices = indices[mask][:k]
+            distances = distances[mask][:k]
+            
+            # Converter distância de cosseno para similaridade
+            similarities = 1 - distances
+        
+        return indices, similarities
+    
+    def _knn_vote(self, neighbor_indices, neighbor_similarities, all_box_data, 
+                  anchor_mask, distance_weighted=True):
+        """
+        Realiza votação baseada nos vizinhos âncoras.
+        
+        Args:
+            neighbor_indices: índices dos K vizinhos
+            neighbor_similarities: similaridades com cada vizinho
+            all_box_data: lista com dados de todos os boxes
+            anchor_mask: máscara booleana indicando quais boxes são âncoras
+            distance_weighted: se True, pondera votos pela similaridade
+        
+        Returns:
+            (label_sugerido, confiança, n_anchors) ou (None, 0, 0) se não há consenso
+        """
+        # Filtrar apenas vizinhos que são âncoras
+        anchor_neighbors = []
+        anchor_similarities = []
+        
+        for idx, sim in zip(neighbor_indices, neighbor_similarities):
+            if anchor_mask[idx]:
+                anchor_neighbors.append(idx)
+                anchor_similarities.append(sim)
+        
+        if len(anchor_neighbors) < self.knn_min_anchors:
+            return None, 0.0, len(anchor_neighbors)
+        
+        # Coletar labels das âncoras vizinhas
+        anchor_labels = [all_box_data[idx]['gt_label'] for idx in anchor_neighbors]
+        
+        if distance_weighted:
+            # Votação ponderada pela similaridade
+            label_weights = defaultdict(float)
+            for label, sim in zip(anchor_labels, anchor_similarities):
+                label_weights[label] += sim
+            
+            total_weight = sum(label_weights.values())
+            best_label = max(label_weights, key=label_weights.get)
+            confidence = label_weights[best_label] / total_weight
+        else:
+            # Votação simples (maioria)
+            label_counts = Counter(anchor_labels)
+            best_label, count = label_counts.most_common(1)[0]
+            confidence = count / len(anchor_labels)
+        
+        return best_label, confidence, len(anchor_neighbors)
     
     def before_train_epoch(self, runner):
         """Executa o pipeline completo antes de cada época."""
@@ -366,11 +445,11 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
         
         if epoch <= self.warmup_epochs:
             if self.debug:
-                print(f"[VCNC-V3] Época {epoch}: Warmup, pulando.")
+                print(f"[VCNC-KNN] Época {epoch}: Warmup, pulando.")
             return
         
         if self.debug:
-            print(f"\n[VCNC-V3] ========== Época {epoch} ==========")
+            print(f"\n[VCNC-KNN] ========== Época {epoch} ==========")
         
         # Reload dataset
         if self.reload_dataset:
@@ -381,7 +460,7 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
         dataset = self._get_base_dataset(dataloader.dataset)
         
         if not hasattr(dataset, 'datasets'):
-            print("[VCNC-V3] ERRO: Esperado ConcatDataset")
+            print("[VCNC-KNN] ERRO: Esperado ConcatDataset")
             return
         
         datasets = dataset.datasets
@@ -398,7 +477,7 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
         # COLETA DE DADOS
         # ============================================================
         if self.debug:
-            print("[VCNC-V3] Coletando dados...")
+            print("[VCNC-KNN] Coletando dados...")
         
         all_box_data = []
         scores_by_class = defaultdict(list)
@@ -486,11 +565,11 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
                     boxes_by_image[img_path].append(box_data)
         
         if len(all_box_data) == 0:
-            print("[VCNC-V3] Nenhum box coletado!")
+            print("[VCNC-KNN] Nenhum box coletado!")
             return
         
         if self.debug:
-            print(f"[VCNC-V3] Coletados {len(all_box_data)} boxes em {len(boxes_by_image)} imagens")
+            print(f"[VCNC-KNN] Coletados {len(all_box_data)} boxes em {len(boxes_by_image)} imagens")
         
         # ============================================================
         # ETAPA 1: RELABEL POR CONFIANÇA ALTA
@@ -499,7 +578,7 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
         
         if self.enable_confidence_relabel:
             if self.debug:
-                print(f"\n[VCNC-V3] ETAPA 1: Relabel por confiança > {self.relabel_confidence_threshold}")
+                print(f"\n[VCNC-KNN] ETAPA 1: Relabel por confiança > {self.relabel_confidence_threshold}")
             
             for box in all_box_data:
                 if (box['pred_score'] > self.relabel_confidence_threshold and 
@@ -522,19 +601,19 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
                     confidence_relabel_count += 1
             
             if self.debug:
-                print(f"[VCNC-V3] Relabelados por confiança: {confidence_relabel_count} "
+                print(f"[VCNC-KNN] Relabelados por confiança: {confidence_relabel_count} "
                       f"({confidence_relabel_count/len(all_box_data)*100:.2f}%)")
         
         # ============================================================
-        # ETAPA 2: RELABEL POR CLUSTERING VISUAL
+        # ETAPA 2: RELABEL POR KNN VISUAL
         # ============================================================
-        clustering_relabel_count = 0
+        knn_relabel_count = 0
         
-        if self.enable_clustering_relabel:
+        if self.enable_knn_relabel:
             if self.debug:
-                print(f"\n[VCNC-V3] ETAPA 2: Relabel por clustering visual")
+                print(f"\n[VCNC-KNN] ETAPA 2: Relabel por KNN visual (K={self.knn_k})")
             
-            # Recalcular GMM
+            # Calcular GMM para identificar âncoras e suspeitos
             scores_by_class_updated = defaultdict(list)
             for box in all_box_data:
                 scores_by_class_updated[box['gt_label']].append(box['score_gt'])
@@ -544,93 +623,113 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
             for box in all_box_data:
                 box['p_noise'] = self._get_p_noise(box['score_gt'], box['gt_label'], gmm_dict)
             
-            # Clustering
-            embeddings = np.array([box['embedding'] for box in all_box_data])
-            cluster_ids = self._cluster_embeddings(embeddings, self.n_clusters)
-            
-            for i, box in enumerate(all_box_data):
-                box['cluster_id'] = cluster_ids[i]
-            
+            # Obter critérios para a época atual
             criteria = self._get_current_criteria(epoch)
             
             if self.debug:
-                print(f"[VCNC-V3] Fase: {criteria['phase']}, Clusters: {len(set(cluster_ids))}")
-            
-            clusters = defaultdict(list)
-            for box in all_box_data:
-                clusters[box['cluster_id']].append(box)
+                print(f"[VCNC-KNN] Fase: {criteria['phase']}")
             
             c_anchor_gmm = criteria['anchor_gmm_threshold']
             c_anchor_pred = criteria['anchor_pred_agreement']
             c_anchor_conf = criteria['anchor_confidence']
             c_suspect_gmm = criteria['suspect_gmm_threshold']
-            c_similarity = criteria['similarity_threshold']
-            c_consensus = criteria['cluster_consensus']
             
-            for cluster_id, cluster_boxes in clusters.items():
-                if len(cluster_boxes) < 2:
-                    continue
+            # Identificar âncoras e suspeitos
+            anchor_mask = np.zeros(len(all_box_data), dtype=bool)
+            suspect_indices = []
+            
+            for i, box in enumerate(all_box_data):
+                is_clean = box['p_noise'] < c_anchor_gmm
+                model_agrees = box['score_gt'] > c_anchor_pred
+                high_confidence = box['pred_score'] > c_anchor_conf
                 
-                anchors = []
-                for box in cluster_boxes:
-                    is_clean = box['p_noise'] < c_anchor_gmm
-                    model_agrees = box['score_gt'] > c_anchor_pred
-                    high_confidence = box['pred_score'] > c_anchor_conf
-                    
-                    if is_clean and model_agrees and high_confidence:
-                        anchors.append(box)
-                
-                if len(anchors) == 0:
-                    continue
-                
-                anchor_labels = [a['gt_label'] for a in anchors]
-                label_counts = Counter(anchor_labels)
-                dominant_label, count = label_counts.most_common(1)[0]
-                consensus_ratio = count / len(anchors)
-                
-                if consensus_ratio < c_consensus:
-                    continue
-                
-                anchor_embeddings = np.array([a['embedding'] for a in anchors])
-                anchor_mean = anchor_embeddings.mean(axis=0)
-                anchor_mean_norm = anchor_mean / (np.linalg.norm(anchor_mean) + 1e-8)
-                
-                anchor_ids = set(id(a) for a in anchors)
-                
-                for box in cluster_boxes:
-                    if id(box) in anchor_ids:
-                        continue
-                    
-                    if box['relabeled_by'] == 'confidence':
-                        continue
-                    
-                    if box['p_noise'] < c_suspect_gmm:
-                        continue
-                    
-                    if box['gt_label'] == dominant_label:
-                        continue
-                    
-                    box_emb_norm = box['embedding'] / (np.linalg.norm(box['embedding']) + 1e-8)
-                    similarity = np.dot(box_emb_norm, anchor_mean_norm)
-                    
-                    if similarity > c_similarity:
-                        self._apply_relabel(
-                            datasets,
-                            box['sub_idx'],
-                            box['data_idx'],
-                            box['gt_idx'],
-                            dominant_label
-                        )
-                        
-                        box['gt_label'] = dominant_label
-                        box['score_gt'] = box['scores'][dominant_label].item()
-                        box['relabeled_by'] = 'clustering'
-                        box['was_relabeled'] = True
-                        clustering_relabel_count += 1
+                if is_clean and model_agrees and high_confidence:
+                    anchor_mask[i] = True
+                elif box['p_noise'] >= c_suspect_gmm and box['relabeled_by'] is None:
+                    suspect_indices.append(i)
+            
+            n_anchors = anchor_mask.sum()
+            n_suspects = len(suspect_indices)
             
             if self.debug:
-                print(f"[VCNC-V3] Relabelados por clustering: {clustering_relabel_count} "
-                      f"({clustering_relabel_count/len(all_box_data)*100:.2f}%)")
+                print(f"[VCNC-KNN] Âncoras: {n_anchors} ({n_anchors/len(all_box_data)*100:.2f}%)")
+                print(f"[VCNC-KNN] Suspeitos: {n_suspects} ({n_suspects/len(all_box_data)*100:.2f}%)")
+            
+            if n_anchors < self.knn_min_anchors:
+                if self.debug:
+                    print(f"[VCNC-KNN] Poucas âncoras, pulando relabeling por KNN")
+            else:
+                # Construir índice KNN
+                embeddings = np.array([box['embedding'] for box in all_box_data])
+                knn_index, embeddings_norm = self._build_knn_index(embeddings)
+                
+                # Processar cada box suspeito
+                knn_stats = {
+                    'processed': 0,
+                    'few_anchor_neighbors': 0,
+                    'no_consensus': 0,
+                    'same_label': 0,
+                    'relabeled': 0
+                }
+                
+                for suspect_idx in suspect_indices:
+                    box = all_box_data[suspect_idx]
+                    knn_stats['processed'] += 1
+                    
+                    # Encontrar K vizinhos mais próximos
+                    neighbor_indices, neighbor_similarities = self._find_knn(
+                        knn_index, embeddings_norm, suspect_idx, self.knn_k
+                    )
+                    
+                    # Votar baseado nos vizinhos âncoras
+                    suggested_label, confidence, n_anchor_neighbors = self._knn_vote(
+                        neighbor_indices, 
+                        neighbor_similarities,
+                        all_box_data,
+                        anchor_mask,
+                        distance_weighted=self.knn_distance_weighted
+                    )
+                    
+                    # Verificar se há consenso suficiente
+                    if n_anchor_neighbors < self.knn_min_anchors:
+                        knn_stats['few_anchor_neighbors'] += 1
+                        continue
+                    
+                    if confidence < self.knn_consensus_threshold:
+                        knn_stats['no_consensus'] += 1
+                        continue
+                    
+                    if suggested_label == box['gt_label']:
+                        knn_stats['same_label'] += 1
+                        continue
+                    
+                    # Aplicar relabeling
+                    self._apply_relabel(
+                        datasets,
+                        box['sub_idx'],
+                        box['data_idx'],
+                        box['gt_idx'],
+                        suggested_label
+                    )
+                    
+                    box['gt_label'] = suggested_label
+                    box['score_gt'] = box['scores'][suggested_label].item()
+                    box['relabeled_by'] = 'knn'
+                    box['was_relabeled'] = True
+                    knn_relabel_count += 1
+                    knn_stats['relabeled'] += 1
+                
+                if self.debug:
+                    print(f"[VCNC-KNN] Estatísticas KNN:")
+                    print(f"[VCNC-KNN]   - Processados: {knn_stats['processed']}")
+                    print(f"[VCNC-KNN]   - Poucas âncoras vizinhas: {knn_stats['few_anchor_neighbors']}")
+                    print(f"[VCNC-KNN]   - Sem consenso: {knn_stats['no_consensus']}")
+                    print(f"[VCNC-KNN]   - Mesmo label: {knn_stats['same_label']}")
+                    print(f"[VCNC-KNN]   - Relabelados: {knn_stats['relabeled']}")
+            
+            if self.debug:
+                print(f"[VCNC-KNN] Relabelados por KNN: {knn_relabel_count} "
+                      f"({knn_relabel_count/len(all_box_data)*100:.2f}%)")
         
         # ============================================================
         # ETAPA 3: SPATIAL REFINEMENT
@@ -640,7 +739,7 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
         
         if self.enable_spatial_refinement:
             if self.debug:
-                print(f"\n[VCNC-V3] ETAPA 3: Spatial Refinement (threshold={self.spatial_difficulty_threshold})")
+                print(f"\n[VCNC-KNN] ETAPA 3: Spatial Refinement (threshold={self.spatial_difficulty_threshold})")
             
             for img_path, img_boxes in boxes_by_image.items():
                 if len(img_boxes) < 2:
@@ -681,26 +780,22 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
                             spatial_relabel_count += 1
             
             if self.debug:
-                print(f"[VCNC-V3] Boxes com alta contaminação: {spatial_stats['high_contamination']}")
-                print(f"[VCNC-V3] Relabelados por spatial: {spatial_relabel_count} "
+                print(f"[VCNC-KNN] Boxes com alta contaminação: {spatial_stats['high_contamination']}")
+                print(f"[VCNC-KNN] Relabelados por spatial: {spatial_relabel_count} "
                       f"({spatial_relabel_count/len(all_box_data)*100:.2f}%)")
         
         # ============================================================
-        # ETAPA 4: FILTRAGEM SELETIVA REFINADA
-        # Filtra apenas boxes que atendem a TODOS os critérios:
-        # 1. p_noise >= threshold (suspeito pelo GMM)
-        # 2. Não foi corrigido por nenhum método
-        # 3. Modelo não está confiante (pred_score < confidence_threshold)
+        # ETAPA 4: FILTRAGEM SELETIVA (OPCIONAL)
         # ============================================================
         selective_filter_count = 0
         
         if self.enable_selective_filtering:
             if self.debug:
-                print(f"\n[VCNC-V3] ETAPA 4: Filtragem Seletiva Refinada")
-                print(f"[VCNC-V3] Critérios: p_noise >= {self.selective_filter_gmm_threshold} AND "
+                print(f"\n[VCNC-KNN] ETAPA 4: Filtragem Seletiva")
+                print(f"[VCNC-KNN] Critérios: p_noise >= {self.selective_filter_gmm_threshold} AND "
                       f"não relabelado AND pred_score < {self.selective_filter_confidence_threshold}")
             
-            # Recalcular GMM com labels atualizados
+            # Recalcular GMM
             scores_by_class_final = defaultdict(list)
             for box in all_box_data:
                 scores_by_class_final[box['gt_label']].append(box['score_gt'])
@@ -710,14 +805,11 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
             for box in all_box_data:
                 box['p_noise_final'] = self._get_p_noise(box['score_gt'], box['gt_label'], gmm_dict_final)
             
-            # Estatísticas detalhadas
             total_suspects = 0
             suspects_relabeled = 0
             suspects_confident = 0
-            suspects_filtered = 0
             
             for box in all_box_data:
-                # Critério 1: É suspeito pelo GMM?
                 is_suspect = box['p_noise_final'] >= self.selective_filter_gmm_threshold
                 
                 if not is_suspect:
@@ -725,17 +817,14 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
                 
                 total_suspects += 1
                 
-                # Critério 2: Foi relabelado?
                 if box['was_relabeled']:
                     suspects_relabeled += 1
                     continue
                 
-                # Critério 3: Modelo está confiante?
                 if box['pred_score'] >= self.selective_filter_confidence_threshold:
                     suspects_confident += 1
                     continue
                 
-                # Passou por todos os critérios → FILTRA
                 self._apply_ignore_flag(
                     datasets,
                     box['sub_idx'],
@@ -743,29 +832,22 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
                     box['gt_idx']
                 )
                 box['filtered'] = True
-                suspects_filtered += 1
                 selective_filter_count += 1
             
             if self.debug:
-                print(f"[VCNC-V3] Total suspeitos (p_noise >= {self.selective_filter_gmm_threshold}): "
-                      f"{total_suspects} ({total_suspects/len(all_box_data)*100:.2f}%)")
-                print(f"[VCNC-V3]   - Corrigidos (relabelados): {suspects_relabeled} "
-                      f"({suspects_relabeled/max(total_suspects,1)*100:.1f}% dos suspeitos)")
-                print(f"[VCNC-V3]   - Não corrigidos mas confiantes (pred >= {self.selective_filter_confidence_threshold}): "
-                      f"{suspects_confident} ({suspects_confident/max(total_suspects,1)*100:.1f}% dos suspeitos)")
-                print(f"[VCNC-V3]   - FILTRADOS: {suspects_filtered} "
-                      f"({suspects_filtered/max(total_suspects,1)*100:.1f}% dos suspeitos)")
-                print(f"[VCNC-V3] Total filtrados: {selective_filter_count} "
-                      f"({selective_filter_count/len(all_box_data)*100:.2f}% do total)")
+                print(f"[VCNC-KNN] Total suspeitos: {total_suspects}")
+                print(f"[VCNC-KNN]   - Corrigidos: {suspects_relabeled}")
+                print(f"[VCNC-KNN]   - Confiantes: {suspects_confident}")
+                print(f"[VCNC-KNN]   - Filtrados: {selective_filter_count}")
         
         # ============================================================
-        # ETAPA 5: FILTRAGEM GMM ADICIONAL (OPCIONAL)
+        # ETAPA 5: FILTRAGEM GMM (OPCIONAL)
         # ============================================================
         gmm_filter_count = 0
         
         if self.enable_gmm_filter:
             if self.debug:
-                print(f"\n[VCNC-V3] ETAPA 5: Filtragem GMM adicional (threshold={self.filter_gmm_threshold})")
+                print(f"\n[VCNC-KNN] ETAPA 5: Filtragem GMM (threshold={self.filter_gmm_threshold})")
             
             if not self.enable_selective_filtering:
                 scores_by_class_final = defaultdict(list)
@@ -792,8 +874,7 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
                     gmm_filter_count += 1
             
             if self.debug:
-                print(f"[VCNC-V3] Filtrados por GMM adicional: {gmm_filter_count} "
-                      f"({gmm_filter_count/len(all_box_data)*100:.2f}%)")
+                print(f"[VCNC-KNN] Filtrados por GMM: {gmm_filter_count}")
         
         # ============================================================
         # ESTATÍSTICAS FINAIS
@@ -801,17 +882,15 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
         total_filtered = selective_filter_count + gmm_filter_count
         
         if self.debug:
-            total_relabels = confidence_relabel_count + clustering_relabel_count + spatial_relabel_count
-            print(f"\n[VCNC-V3] ===== Resumo Época {epoch} =====")
-            print(f"[VCNC-V3] Total de boxes: {len(all_box_data)}")
-            print(f"[VCNC-V3] Relabel confiança: {confidence_relabel_count} ({confidence_relabel_count/len(all_box_data)*100:.2f}%)")
-            print(f"[VCNC-V3] Relabel clustering: {clustering_relabel_count} ({clustering_relabel_count/len(all_box_data)*100:.2f}%)")
-            print(f"[VCNC-V3] Relabel spatial: {spatial_relabel_count} ({spatial_relabel_count/len(all_box_data)*100:.2f}%)")
-            print(f"[VCNC-V3] Total relabels: {total_relabels} ({total_relabels/len(all_box_data)*100:.2f}%)")
-            print(f"[VCNC-V3] Filtrados (seletiva): {selective_filter_count} ({selective_filter_count/len(all_box_data)*100:.2f}%)")
-            print(f"[VCNC-V3] Filtrados (GMM): {gmm_filter_count} ({gmm_filter_count/len(all_box_data)*100:.2f}%)")
-            print(f"[VCNC-V3] Total filtrados: {total_filtered} ({total_filtered/len(all_box_data)*100:.2f}%)")
-            print(f"[VCNC-V3] ==========================================\n")
+            total_relabels = confidence_relabel_count + knn_relabel_count + spatial_relabel_count
+            print(f"\n[VCNC-KNN] ===== Resumo Época {epoch} =====")
+            print(f"[VCNC-KNN] Total de boxes: {len(all_box_data)}")
+            print(f"[VCNC-KNN] Relabel confiança: {confidence_relabel_count} ({confidence_relabel_count/len(all_box_data)*100:.2f}%)")
+            print(f"[VCNC-KNN] Relabel KNN: {knn_relabel_count} ({knn_relabel_count/len(all_box_data)*100:.2f}%)")
+            print(f"[VCNC-KNN] Relabel spatial: {spatial_relabel_count} ({spatial_relabel_count/len(all_box_data)*100:.2f}%)")
+            print(f"[VCNC-KNN] Total relabels: {total_relabels} ({total_relabels/len(all_box_data)*100:.2f}%)")
+            print(f"[VCNC-KNN] Total filtrados: {total_filtered} ({total_filtered/len(all_box_data)*100:.2f}%)")
+            print(f"[VCNC-KNN] ==========================================\n")
     
     def _reload_datasets(self, runner):
         """Recarrega os datasets."""
@@ -824,7 +903,7 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
                     subds.full_init()
         except Exception as e:
             if self.debug:
-                print(f"[VCNC-V3] Erro ao recarregar: {e}")
+                print(f"[VCNC-KNN] Erro ao recarregar: {e}")
     
     def _get_base_dataset(self, dataset):
         while hasattr(dataset, 'dataset'):
@@ -845,7 +924,7 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
             instance['bbox_label'] = new_label
         except Exception as e:
             if self.debug:
-                print(f"[VCNC-V3] Erro relabel: {e}")
+                print(f"[VCNC-KNN] Erro relabel: {e}")
     
     def _apply_ignore_flag(self, datasets, sub_idx, data_idx, gt_idx):
         try:
@@ -853,4 +932,4 @@ class VCNCProgressiveSpatialSelectiveFilterHook(Hook):
             instance['ignore_flag'] = 1
         except Exception as e:
             if self.debug:
-                print(f"[VCNC-V3] Erro ignore_flag: {e}")
+                print(f"[VCNC-KNN] Erro ignore_flag: {e}")
