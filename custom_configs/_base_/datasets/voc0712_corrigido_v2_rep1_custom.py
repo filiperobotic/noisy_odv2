@@ -2,102 +2,14 @@
 dataset_type = 'VOCDataset'
 # dataset_type = 'VOCDatasetPartial'
 
-# -----------------------------------------------------------------------------
-# Filipe: Switch VOC annotation variants (clean / noisy) WITHOUT copying XMLs.
+# IMPORTANT:
+# We keep this base config "pure" (no imports / helper functions) to avoid
+# MMEngine lazy_import vs non-lazy_import chain errors.
 #
-# You keep ONE canonical VOCdevkit with images + ImageSets:
-#   <VOC_BASE_ROOT>/VOC2007/JPEGImages, ImageSets
-#   <VOC_BASE_ROOT>/VOC2012/JPEGImages, ImageSets
-#
-# And you keep noisy XMLs elsewhere (your current layout), e.g.:
-#   .../NoiseAnnotations/simetrics/
-#       Annotations_VOC2007_trainval_class_noise_perc_20_simetric/*.xml
-#       Annotations_VOC2012_trainval_class_noise_perc_20_simetric/*.xml
-#
-# At runtime we create a lightweight "virtual VOCdevkit" with symlinks:
-#   JPEGImages  -> canonical JPEGImages
-#   ImageSets   -> canonical ImageSets
-#   Annotations -> chosen noisy-XML folder
-#
-# How to control via env vars:
-#   # 1) Point to canonical VOCdevkit (with images)
-#   export VOC_BASE_ROOT=/home/pesquisador/pesquisa/filipe/noisy_odv2/data/VOCdevkit
-#
-#   # 2) Choose annotation source:
-#   export VOC_ANN_VARIANT=clean
-#   # OR (recommended with your current folders):
-#   export VOC_ANN_VARIANT=custom
-#   export VOC2007_ANN_DIR=/home/.../NoiseAnnotations/simetrics/Annotations_VOC2007_trainval_class_noise_perc_20_simetric
-#   export VOC2012_ANN_DIR=/home/.../NoiseAnnotations/simetrics/Annotations_VOC2012_trainval_class_noise_perc_20_simetric
-#
-# Optional:
-#   export VOC_VIRTUAL_ROOT=/home/.../noisy_odv2/data/VOCdevkit_variants
-# -----------------------------------------------------------------------------
-import os
-from pathlib import Path
-
-VOC_BASE_ROOT = Path(os.getenv('VOC_BASE_ROOT', 'data/VOCdevkit/')).expanduser().resolve()
-VOC_ANN_VARIANT = os.getenv('VOC_ANN_VARIANT', 'clean')  # clean | custom
-VOC_VIRTUAL_ROOT = Path(os.getenv('VOC_VIRTUAL_ROOT', 'data/VOCdevkit_variants/')).expanduser().resolve() / VOC_ANN_VARIANT
-
-
-def _symlink_dir(src: Path, dst: Path):
-    """Create/refresh a directory symlink dst -> src."""
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        if dst.is_symlink():
-            dst.unlink()
-        if not dst.exists():
-            dst.symlink_to(src, target_is_directory=True)
-    except FileExistsError:
-        pass
-
-
-def _prepare_virtual_vocdevkit() -> Path:
-    """Return a VOCdevkit root that MMDetection should use."""
-    if VOC_ANN_VARIANT == 'clean':
-        return VOC_BASE_ROOT
-
-    if VOC_ANN_VARIANT != 'custom':
-        raise ValueError(
-            f"Unsupported VOC_ANN_VARIANT={VOC_ANN_VARIANT!r}. Use 'clean' or 'custom'."
-        )
-
-    ann_2007 = os.getenv('VOC2007_ANN_DIR', '').strip()
-    ann_2012 = os.getenv('VOC2012_ANN_DIR', '').strip()
-    if not ann_2007 or not ann_2012:
-        raise RuntimeError(
-            "VOC_ANN_VARIANT=custom requires BOTH env vars: VOC2007_ANN_DIR and VOC2012_ANN_DIR"
-        )
-
-    ann_2007 = Path(ann_2007).expanduser().resolve()
-    ann_2012 = Path(ann_2012).expanduser().resolve()
-
-    # Sanity checks
-    for year, ann_dir in [('VOC2007', ann_2007), ('VOC2012', ann_2012)]:
-        base_year = VOC_BASE_ROOT / year
-        if not (base_year / 'JPEGImages').exists():
-            raise FileNotFoundError(f"Missing canonical JPEGImages: {base_year / 'JPEGImages'}")
-        if not (base_year / 'ImageSets').exists():
-            raise FileNotFoundError(f"Missing canonical ImageSets: {base_year / 'ImageSets'}")
-        if not ann_dir.exists():
-            raise FileNotFoundError(f"Missing noisy annotation folder for {year}: {ann_dir}")
-
-    # Create virtual VOC2007/VOC2012
-    for year, ann_dir in [('VOC2007', ann_2007), ('VOC2012', ann_2012)]:
-        base_year = VOC_BASE_ROOT / year
-        virt_year = VOC_VIRTUAL_ROOT / year
-        virt_year.mkdir(parents=True, exist_ok=True)
-
-        _symlink_dir(base_year / 'JPEGImages', virt_year / 'JPEGImages')
-        _symlink_dir(base_year / 'ImageSets', virt_year / 'ImageSets')
-        _symlink_dir(ann_dir, virt_year / 'Annotations')
-
-    return VOC_VIRTUAL_ROOT
-
-
-# This is what MMDetection will use as the dataset root
-data_root = str(_prepare_virtual_vocdevkit()) + '/'
+# Instead, select the annotation variant in your .sh job by preparing the
+# folder below (symlinks) BEFORE calling tools/train.py.
+# See example scripts in the chat.
+data_root = 'data/VOCdevkit_active/'
 
 
 # Example to use different file client
