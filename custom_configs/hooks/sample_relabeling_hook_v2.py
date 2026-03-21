@@ -20,6 +20,32 @@ import matplotlib.pyplot as plt
 import cv2
 import os
 
+def unwrap_to_leaf_datasets(dataset):
+    datasets = [dataset]
+    changed = True
+    while changed:
+        changed = False
+        new_datasets = []
+        for ds in datasets:
+            if hasattr(ds, 'datasets'):
+                new_datasets.extend(ds.datasets)
+                changed = True
+            elif hasattr(ds, 'dataset'):
+                new_datasets.append(ds.dataset)
+                changed = True
+            else:
+                new_datasets.append(ds)
+        datasets = new_datasets
+    return datasets
+
+
+def reload_leaf_datasets(dataset):
+    for ds in unwrap_to_leaf_datasets(dataset):
+        if hasattr(ds, '_fully_initialized'):
+            ds._fully_initialized = False
+        if hasattr(ds, 'full_init'):
+            ds.full_init()
+
 
 def tensor_to_numpy_img(tensor_img, mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375]):
     """
@@ -192,32 +218,32 @@ class MyHookFilterPredGT_Class_Relabel(Hook):
 
             print(f"[EPOCH]- runner.epoch: {runner.epoch}")
             print(f"[DEBUG] Antes do hook - iter: {runner.iter}")
+
             dataloader = runner.train_loop.dataloader
             dataset = dataloader.dataset
 
-            #reload_dataset = True
-            # my_value = 3
-            #reload_dataset = getattr(runner.cfg, 'reload_dataset', False)  
-            #my_value =  getattr(runner.cfg, 'my_value', 10)  
             reload_dataset = self.reload_dataset
             relabel_conf = self.relabel_conf
             
-            # import pdb; pdb.set_trace()
             if reload_dataset:
-                runner.train_loop.dataloader.dataset.dataset.datasets[0]._fully_initialized = False
-                runner.train_loop.dataloader.dataset.dataset.datasets[0].full_init()
+                # runner.train_loop.dataloader.dataset.dataset.datasets[0]._fully_initialized = False
+                # runner.train_loop.dataloader.dataset.dataset.datasets[0].full_init()
 
-                runner.train_loop.dataloader.dataset.dataset.datasets[1]._fully_initialized = False
-                runner.train_loop.dataloader.dataset.dataset.datasets[1].full_init()
+                # runner.train_loop.dataloader.dataset.dataset.datasets[1]._fully_initialized = False
+                # runner.train_loop.dataloader.dataset.dataset.datasets[1].full_init()
+                reload_leaf_datasets(dataset)
 
             # Desencapsular RepeatDataset até o ConcatDataset
-            while hasattr(dataset, 'dataset'):
-                dataset = dataset.dataset
+            # while hasattr(dataset, 'dataset'):
+            #     dataset = dataset.dataset
 
-            if not hasattr(dataset, 'datasets'):
-                raise ValueError("Esperado um ConcatDataset, mas dataset não tem atributo 'datasets'.")
+            # if not hasattr(dataset, 'datasets'):
+            #     raise ValueError("Esperado um ConcatDataset, mas dataset não tem atributo 'datasets'.")
 
-            datasets = dataset.datasets  # Lista de datasets dentro do ConcatDataset
+            # datasets = dataset.datasets  # Lista de datasets dentro do ConcatDataset
+            datasets = unwrap_to_leaf_datasets(dataset)
+
+
 
             assigner = MaxIoUAssigner(
                 pos_iou_thr=self.iou_assigner,
