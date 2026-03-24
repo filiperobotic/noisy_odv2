@@ -38,6 +38,44 @@ except ImportError:
     from sklearn.cluster import KMeans
     from sklearn.neighbors import NearestNeighbors
 
+def unwrap_to_leaf_datasets(dataset):
+    """
+    Retorna uma lista com os datasets 'folha', independentemente de o
+    dataset estar encapsulado em RepeatDataset, ConcatDataset etc.
+    """
+    datasets = [dataset]
+
+    changed = True
+    while changed:
+        changed = False
+        new_datasets = []
+
+        for ds in datasets:
+            if hasattr(ds, 'datasets'):   # ConcatDataset
+                new_datasets.extend(ds.datasets)
+                changed = True
+            elif hasattr(ds, 'dataset'):  # RepeatDataset e wrappers similares
+                new_datasets.append(ds.dataset)
+                changed = True
+            else:                         # dataset folha, ex: VOCDataset
+                new_datasets.append(ds)
+
+        datasets = new_datasets
+
+    return datasets
+
+
+def reload_leaf_datasets(dataset):
+    """
+    Recarrega todos os datasets folha.
+    """
+    leaf_datasets = unwrap_to_leaf_datasets(dataset)
+
+    for ds in leaf_datasets:
+        if hasattr(ds, '_fully_initialized'):
+            ds._fully_initialized = False
+        if hasattr(ds, 'full_init'):
+            ds.full_init()
 
 # ============================================================
 # FUNÇÕES DE SPATIAL REFINEMENT
@@ -445,19 +483,35 @@ class VCNCHybridKMeansKNNHook(Hook):
         if self.debug:
             print(f"\n[VCNC-Hybrid] ========== Época {epoch} ==========")
         
+        # # Reload dataset
+        # if self.reload_dataset:
+        #     self._reload_datasets(runner)
+        
+        # # Obter dataset
+        # dataloader = runner.train_loop.dataloader
+        # dataset = self._get_base_dataset(dataloader.dataset)
+        
+        # if not hasattr(dataset, 'datasets'):
+        #     print("[VCNC-Hybrid] ERRO: Esperado ConcatDataset")
+        #     return
+        
+        # datasets = dataset.datasets
+        dataloader = runner.train_loop.dataloader
+        # dataset = self._get_base_dataset(dataloader.dataset)    
+        dataset = dataloader.dataset
+        
         # Reload dataset
         if self.reload_dataset:
-            self._reload_datasets(runner)
+            # self._reload_datasets(runner)
+            reload_leaf_datasets(dataset)
+
         
-        # Obter dataset
-        dataloader = runner.train_loop.dataloader
-        dataset = self._get_base_dataset(dataloader.dataset)
+        # if not hasattr(dataset, 'datasets'):
+        #     print("[VCNC-Spatial] ERRO: Esperado ConcatDataset")
+        #     return
         
-        if not hasattr(dataset, 'datasets'):
-            print("[VCNC-Hybrid] ERRO: Esperado ConcatDataset")
-            return
-        
-        datasets = dataset.datasets
+        # datasets = dataset.datasets
+        datasets = unwrap_to_leaf_datasets(dataset)
         dataset_img_map = self._build_image_map(datasets)
         
         assigner = MaxIoUAssigner(
