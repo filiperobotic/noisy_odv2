@@ -662,8 +662,10 @@ class MyHookFilterPredGT_Class_Relabel(Hook):
                                 if img_path not in img_paths:
                                     img_paths = np.append(img_paths, img_path)
                     
-                    if len(scores) == 0:
-                        print(f"Aviso: Nenhuma amostra encontrada para a classe {c}.")
+                    # if len(scores) == 0:
+                    if len(scores) < self.numGMM:
+                        # print(f"Aviso: Nenhuma amostra encontrada para a classe {c}.")
+                        print(f"Aviso: Classe {c} tem apenas {len(scores)} amostras; pulando GMM com {self.numGMM} componentes.")
                         continue
 
                     
