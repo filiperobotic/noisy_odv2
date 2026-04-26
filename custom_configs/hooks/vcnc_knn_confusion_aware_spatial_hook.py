@@ -207,6 +207,13 @@ class VCNCKNNConfusionAwareHook(Hook):
                  # Razão multiplicativa: pares com severidade > k * mediana são outliers.
                  # 10x = "uma ordem de grandeza acima do típico" (estrutural).
                  confusion_gate_ratio_factor: float = 10.0,
+                 # Ação do gate quando detecta par ruidoso:
+                 #   'skip'   → pula o relabel, mantém GT (versão original do gate)
+                 #   'filter' → aplica ignore_flag, remove a amostra do treino
+                 # 'filter' é mais agressivo e funciona melhor em asym, onde o GT
+                 # original tende a ser o ruído. Em sym o gate fica silencioso, então
+                 # essa escolha não afeta o comportamento.
+                 confusion_gate_action: str = 'filter',
                  # Aplica gate só na fase agressiva (após progressive_epochs)?
                  # Default False — gate ativo desde o fim do warmup.
                  confusion_gate_aggressive_only: bool = False,
@@ -259,6 +266,9 @@ class VCNCKNNConfusionAwareHook(Hook):
         self.confusion_gate_min_samples = confusion_gate_min_samples
         self.confusion_gate_mad_factor = confusion_gate_mad_factor
         self.confusion_gate_ratio_factor = confusion_gate_ratio_factor
+        self.confusion_gate_action = confusion_gate_action
+        assert self.confusion_gate_action in ('skip', 'filter'), \
+            f"confusion_gate_action deve ser 'skip' ou 'filter', recebeu {confusion_gate_action!r}"
         self.confusion_gate_aggressive_only = confusion_gate_aggressive_only
 
         self.enable_spatial_refinement = enable_spatial_refinement
@@ -624,6 +634,7 @@ class VCNCKNNConfusionAwareHook(Hook):
                 print(f"[VCNC-KNN-CA] Gate de confusão DESATIVADO nesta época.")
 
         gate_skip_count = {'confidence': 0, 'knn': 0}
+        gate_filter_count = {'confidence': 0, 'knn': 0}
 
         # ============================================================
         # ETAPA 1: RELABEL POR CONFIANÇA ALTA (com gate)
@@ -638,9 +649,17 @@ class VCNCKNNConfusionAwareHook(Hook):
                 if (box['pred_score'] > self.relabel_confidence_threshold and
                         box['pred_label'] != box['gt_label']):
 
-                    # GATE: se par (gt, pred) está marcado como ruidoso, pula relabel
+                    # GATE: par ruidoso detectado
                     if gate_active and (box['gt_label'], box['pred_label']) in confused_pairs:
-                        gate_skip_count['confidence'] += 1
+                        if self.confusion_gate_action == 'filter':
+                            # Filtra a amostra: tanto GT quanto pred são suspeitos de
+                            # estar na direção de ruído, o mais seguro é remover.
+                            self._apply_ignore_flag(datasets, box['sub_idx'],
+                                                    box['data_idx'], box['gt_idx'])
+                            box['filtered'] = True
+                            gate_filter_count['confidence'] += 1
+                        else:  # 'skip'
+                            gate_skip_count['confidence'] += 1
                         continue
 
                     new_label = box['pred_label']
@@ -656,7 +675,8 @@ class VCNCKNNConfusionAwareHook(Hook):
                 print(f"[VCNC-KNN-CA] Relabelados por confiança: {confidence_relabel_count} "
                       f"({confidence_relabel_count/len(all_box_data)*100:.2f}%)")
                 if gate_active:
-                    print(f"[VCNC-KNN-CA] Bloqueados pelo gate (Etapa 1): {gate_skip_count['confidence']}")
+                    print(f"[VCNC-KNN-CA] Gate Etapa 1 — bloqueados (skip): {gate_skip_count['confidence']}, "
+                          f"filtrados: {gate_filter_count['confidence']}")
 
         # ============================================================
         # ETAPA 2: RELABEL POR KNN VISUAL (com gate)
@@ -739,10 +759,17 @@ class VCNCKNNConfusionAwareHook(Hook):
                         knn_stats['same_label'] += 1
                         continue
 
-                    # GATE: bloqueia relabel para par ruidoso
+                    # GATE: par ruidoso detectado
                     if gate_active and (box['gt_label'], suggested_label) in confused_pairs:
-                        knn_stats['gate_blocked'] += 1
-                        gate_skip_count['knn'] += 1
+                        if self.confusion_gate_action == 'filter':
+                            self._apply_ignore_flag(datasets, box['sub_idx'],
+                                                    box['data_idx'], box['gt_idx'])
+                            box['filtered'] = True
+                            gate_filter_count['knn'] += 1
+                            knn_stats['gate_filtered'] = knn_stats.get('gate_filtered', 0) + 1
+                        else:  # 'skip'
+                            knn_stats['gate_blocked'] += 1
+                            gate_skip_count['knn'] += 1
                         continue
 
                     self._apply_relabel(datasets, box['sub_idx'], box['data_idx'],
@@ -760,7 +787,8 @@ class VCNCKNNConfusionAwareHook(Hook):
                     print(f"[VCNC-KNN-CA]   - Poucas âncoras vizinhas: {knn_stats['few_anchor_neighbors']}")
                     print(f"[VCNC-KNN-CA]   - Sem consenso: {knn_stats['no_consensus']}")
                     print(f"[VCNC-KNN-CA]   - Mesmo label: {knn_stats['same_label']}")
-                    print(f"[VCNC-KNN-CA]   - Bloqueados pelo gate: {knn_stats['gate_blocked']}")
+                    print(f"[VCNC-KNN-CA]   - Gate skip: {knn_stats['gate_blocked']}, "
+                          f"Gate filter: {knn_stats.get('gate_filtered', 0)}")
                     print(f"[VCNC-KNN-CA]   - Relabelados: {knn_stats['relabeled']}")
 
             if self.debug:
@@ -854,6 +882,7 @@ class VCNCKNNConfusionAwareHook(Hook):
             total_relabels = confidence_relabel_count + knn_relabel_count + spatial_relabel_count
             total_filtered = selective_filter_count + gmm_filter_count
             total_skipped = gate_skip_count['confidence'] + gate_skip_count['knn']
+            total_gate_filtered = gate_filter_count['confidence'] + gate_filter_count['knn']
             print(f"\n[VCNC-KNN-CA] ===== Resumo Época {epoch} =====")
             print(f"[VCNC-KNN-CA] Total de boxes: {len(all_box_data)}")
             print(f"[VCNC-KNN-CA] Relabel confiança: {confidence_relabel_count}")
@@ -861,9 +890,10 @@ class VCNCKNNConfusionAwareHook(Hook):
             print(f"[VCNC-KNN-CA] Relabel spatial: {spatial_relabel_count}")
             print(f"[VCNC-KNN-CA] Total relabels: {total_relabels} "
                   f"({total_relabels/len(all_box_data)*100:.2f}%)")
-            print(f"[VCNC-KNN-CA] Bloqueados pelo gate: {total_skipped} "
-                  f"(conf={gate_skip_count['confidence']}, knn={gate_skip_count['knn']})")
-            print(f"[VCNC-KNN-CA] Total filtrados: {total_filtered}")
+            print(f"[VCNC-KNN-CA] Gate (action='{self.confusion_gate_action}'): "
+                  f"skipped={total_skipped} (conf={gate_skip_count['confidence']}, knn={gate_skip_count['knn']}), "
+                  f"filtered={total_gate_filtered} (conf={gate_filter_count['confidence']}, knn={gate_filter_count['knn']})")
+            print(f"[VCNC-KNN-CA] Total filtrados (etapas 4+5): {total_filtered}")
             print(f"[VCNC-KNN-CA] ==========================================\n")
 
     # --------- helpers de IO de dataset ---------
