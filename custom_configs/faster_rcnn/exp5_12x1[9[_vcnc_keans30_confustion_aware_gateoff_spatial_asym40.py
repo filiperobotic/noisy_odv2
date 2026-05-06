@@ -8,7 +8,7 @@ _base_ = [
     # '../_base_/models/faster-rcnn_r50_fpn.py',
     '../_base_/models/faster-rcnn_r50_fpn_20c.py',
     #   '../_base_/datasets/voc0712_corrigido_debug.py',
-    '../_base_/datasets/voc0712_daniel_sim40.py',
+    '../_base_/datasets/voc0712_daniel_asym40.py',
     '../_base_/default_runtime.py'
 ]
 
@@ -22,7 +22,7 @@ custom_imports = dict(
 )
 
 custom_imports = dict(
-    imports=['custom_configs.hooks.vcnc_kmeans_confusionMargin_aware_spatial_hook',
+    imports=['custom_configs.hooks.vcnc_kmeans_confusion_aware_spatial_hook',
              'custom_configs.hooks.wandb_pred_buckets_hook'],  # Caminho correto para o arquivo do hook
     allow_failed_imports=False
 )
@@ -30,7 +30,7 @@ custom_imports = dict(
 custom_hooks = [
     
     dict(
-    type='VCNCKMeansConfusionMarginHook',
+    type='VCNCKMeansConfusionAwareHook',
     
     warmup_epochs=1,
     num_classes=20,
@@ -39,12 +39,12 @@ custom_hooks = [
     enable_confidence_relabel=True,
     relabel_confidence_threshold=0.9,
     
-    # Etapa 2 — K-means
+    # Etapa 2
     enable_clustering_relabel=True,
     use_softmax_as_embedding=True,
     progressive_epochs=4,
     
-    # Conservador
+    # Critérios conservadores (épocas iniciais)
     early_anchor_gmm_threshold=0.15,
     early_anchor_pred_agreement=0.85,
     early_anchor_confidence=0.9,
@@ -52,7 +52,7 @@ custom_hooks = [
     early_similarity_threshold=0.7,
     early_cluster_consensus=0.85,
     
-    # Agressivo
+    # Critérios agressivos (épocas posteriores)
     anchor_gmm_threshold=0.4,
     anchor_pred_agreement=0.6,
     anchor_confidence=0.7,
@@ -60,27 +60,29 @@ custom_hooks = [
     similarity_threshold=0.4,
     cluster_consensus=0.6,
     
-    # Gate
+    # Parâmetros do gate (não tunáveis — convenção)
     confusion_gate_min_samples=50,
     confusion_gate_mad_factor=3.0,
     confusion_gate_ratio_factor=10.0,
-    confusion_gate_aggressive_only=False,
-    margin_threshold=0.2,
+    confusion_gate_aggressive_only=True,  # CRÍTICO: K-means precisa disso
     
     # Etapa 3 — Spatial
     enable_spatial_refinement=True,
     spatial_difficulty_threshold=0.5,
     
-    # Etapa 4 — GMM filter (mantido como no VCNC original)
+    # Etapa 4 — GMM filter (mantido True como no VCNC original)
     enable_gmm_filter=True,
     gmm_components=4,
     filter_gmm_threshold=0.7,
     
+    # Misc
     iou_assigner=0.5,
     reload_dataset=True,
     debug=True,
+
     n_clusters=30,
-    enable_confusion_gate=True,
+    enable_confusion_gate=False,
+    confusion_gate_action='filter',  # irrelevante
 ),
     dict(
         type='WandbPredBucketsHook',

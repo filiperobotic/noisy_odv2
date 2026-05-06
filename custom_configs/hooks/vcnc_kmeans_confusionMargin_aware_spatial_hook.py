@@ -279,7 +279,9 @@ class VCNCKMeansConfusionMarginHook(Hook):
                  confusion_gate_ratio_factor: float = 10.0,
                  # Limiar de margem (top1 - top2). 0.2 reproduz VCNCMarginBased.
                  margin_threshold: float = 0.2,
-                 confusion_gate_aggressive_only: bool = False,
+                 # IMPORTANTE: True por default — gate só ativo APÓS progressive_epochs
+                 # para evitar falsos positivos da época 2 (modelo instável).
+                 confusion_gate_aggressive_only: bool = True,
                  
                  # === ETAPA 3: Spatial Refinement ===
                  enable_spatial_refinement: bool = True,

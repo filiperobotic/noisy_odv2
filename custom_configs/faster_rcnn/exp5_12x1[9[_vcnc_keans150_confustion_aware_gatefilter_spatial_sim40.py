@@ -80,9 +80,9 @@ custom_hooks = [
     reload_dataset=True,
     debug=True,
 
-    n_clusters=30,
+    n_clusters=150,
     enable_confusion_gate=True,
-    confusion_gate_action='skip',
+    confusion_gate_action='filter',
 ),
     dict(
         type='WandbPredBucketsHook',

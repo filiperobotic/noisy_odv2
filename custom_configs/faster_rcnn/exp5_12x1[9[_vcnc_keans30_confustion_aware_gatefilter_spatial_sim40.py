@@ -64,7 +64,7 @@ custom_hooks = [
     confusion_gate_min_samples=50,
     confusion_gate_mad_factor=3.0,
     confusion_gate_ratio_factor=10.0,
-    confusion_gate_aggressive_only=False,
+    confusion_gate_aggressive_only=True,  # CRÍTICO: K-means precisa disso
     
     # Etapa 3 — Spatial
     enable_spatial_refinement=True,

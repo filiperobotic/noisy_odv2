@@ -274,7 +274,12 @@ class VCNCKMeansConfusionAwareHook(Hook):
                  confusion_gate_mad_factor: float = 3.0,
                  confusion_gate_ratio_factor: float = 10.0,
                  confusion_gate_action: str = 'filter',   # 'filter' ou 'skip'
-                 confusion_gate_aggressive_only: bool = False,
+                 # IMPORTANTE: True por default — gate só ativo APÓS progressive_epochs.
+                 # Necessário para K-means porque a matriz de confusão na época 2 é
+                 # instável (modelo mal aprendeu) e dispara falsos positivos massivos
+                 # em ruído simétrico. Na fase conservadora, o pipeline corre exatamente
+                 # como o VCNC original, sem interferência do gate.
+                 confusion_gate_aggressive_only: bool = True,
                  
                  # === ETAPA 3: Spatial Refinement ===
                  enable_spatial_refinement: bool = True,
