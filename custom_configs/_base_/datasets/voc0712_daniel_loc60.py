@@ -2,7 +2,7 @@
 dataset_type = 'VOCDataset'
 
 data_root = '/home/pesquisador/pesquisa/daniel/datasets/VOCdevkit/NoiseAnnotations/' #'data/VOCdevkit/'
-ann_subdir = "shift/shift_papers/VOC0712_shift_60/" #"original/Annotations" #'shift/shift_papers/'
+ann_subdir = "shift/shift_papers/VOC0712_shift_60_2/" #"original/Annotations" #'shift/shift_papers/'
 ann_subdir_val = "original/Annotations"
 
 
